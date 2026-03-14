@@ -1,0 +1,30 @@
+# 生成物
+generated/
+logs/
+*.mp4
+*.wav
+*.mp3
+
+# 参考動画
+reference/
+
+# 環境
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# 認証ファイル
+client_secrets.json
+credentials.json
+token.pickle
+*.pickle
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store

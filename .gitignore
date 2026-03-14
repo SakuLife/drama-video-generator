@@ -28,3 +28,4 @@ token.pickle
 # OS
 Thumbs.db
 .DS_Store
+.github/workflows/

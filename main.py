@@ -71,32 +71,46 @@ def run_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"出力先: {output_dir}")
 
+    script_path = output_dir / "script.json"
+
     try:
         # === ステージ1: 台本生成 ===
         if stage in (None, "script"):
             from src.script_gen import auto_select_theme, generate_script
 
-            if not theme:
-                if auto:
-                    theme = auto_select_theme(gemini_key)
-                else:
-                    logger.error("--theme または --auto を指定してください")
-                    return
+            # 台本があれば作り直さない。作り直すと、生成済みの画像は前の台本のもの
+            # なのに台本だけ新しくなり、絵と話が食い違った動画が黙って完成する。
+            # （画像・音声と同じく「生成済みはスキップ」で揃える）
+            if script_path.exists() and stage != "script":
+                script = json.loads(script_path.read_text(encoding="utf-8"))
+                logger.info(
+                    f"台本は生成済みのため再利用します（{len(script['scenes'])}シーン）: {script_path}"
+                )
+                if theme:
+                    logger.warning(
+                        f"指定された --theme は無視されます（既存の台本を使うため）: {theme[:40]}。"
+                        "作り直すなら script.json を消すか --output-dir を分けてください。"
+                    )
+            else:
+                if not theme:
+                    if auto:
+                        theme = auto_select_theme(gemini_key)
+                    else:
+                        raise RuntimeError("--theme または --auto を指定してください")
 
-            script = generate_script(
-                api_key=gemini_key,
-                theme=theme,
-                output_dir=output_dir,
-                target_scenes=target_scenes,
-            )
-            logger.info(f"台本生成完了: {len(script['scenes'])}シーン")
+                script = generate_script(
+                    api_key=gemini_key,
+                    theme=theme,
+                    output_dir=output_dir,
+                    target_scenes=target_scenes,
+                )
+                logger.info(f"台本生成完了: {len(script['scenes'])}シーン")
 
             if stage == "script":
                 return
 
         # 台本読み込み（途中ステージから再開時）
         if stage and stage != "script":
-            script_path = output_dir / "script.json"
             if not script_path.exists():
                 raise RuntimeError(f"台本が見つかりません: {script_path}")
             script = json.loads(script_path.read_text(encoding="utf-8"))

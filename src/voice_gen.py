@@ -1,13 +1,22 @@
 """ステージ3: VOICEVOXによるナレーション音声生成"""
 
 import logging
+import os
+import subprocess
+import time
 import wave
-from io import BytesIO
 from pathlib import Path
 
 import requests
 
-from config.settings import VOICEVOX_SPEAKER_ID, VOICEVOX_SPEED, VOICEVOX_URL
+from config.settings import (
+    AUDIO_SAMPLE_RATE,
+    VOICEVOX_BOOT_TIMEOUT,
+    VOICEVOX_EXE_PATH,
+    VOICEVOX_SPEAKER_ID,
+    VOICEVOX_SPEED,
+    VOICEVOX_URL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +44,9 @@ def generate_voice(
     query["pitchScale"] = 0.0
     query["intonationScale"] = 1.2
     query["volumeScale"] = 1.0
+    # 動画側と同じサンプリングレートで出す（合成時の再変換を避ける）
+    query["outputSamplingRate"] = AUDIO_SAMPLE_RATE
+    query["outputStereo"] = False
 
     # 音声合成
     synth_resp = requests.post(
@@ -45,9 +57,35 @@ def generate_voice(
     )
     synth_resp.raise_for_status()
 
+    # 一時ファイル経由で書く（途中で落ちても壊れたWAVを正式名で残さない）
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(synth_resp.content)
+    tmp_path = output_path.with_suffix(".wav.part")
+    tmp_path.write_bytes(synth_resp.content)
+    os.replace(tmp_path, output_path)
     return output_path
+
+
+def _is_valid_wav(path: Path) -> bool:
+    """再開時に「生成済み」と見なしてよいWAVか（壊れていれば作り直す）
+
+    途中で切れたWAVはヘッダーが残るため、ヘッダーのフレーム数だけ見ても気付けない。
+    実データがヘッダーの申告どおり入っているかまで照合する。
+    """
+    if not path.exists():
+        return False
+    try:
+        with wave.open(str(path), "rb") as wf:
+            declared = wf.getnframes()
+            if declared <= 0:
+                raise ValueError("フレーム数が0")
+            block_align = wf.getnchannels() * wf.getsampwidth()
+            actual = len(wf.readframes(declared))
+            if actual < declared * block_align:
+                raise ValueError(f"データが途中で切れている（{actual} < {declared * block_align}）")
+        return True
+    except Exception as e:
+        logger.warning(f"壊れた音声を検出。作り直します: {path.name}（{e}）")
+        return False
 
 
 def get_audio_duration(audio_path: Path) -> float:
@@ -77,7 +115,7 @@ def generate_all_voices(
         text = scene["narration"]
 
         # 既に生成済みならスキップ
-        if audio_path.exists():
+        if _is_valid_wav(audio_path):
             duration = get_audio_duration(audio_path)
             logger.info(f"スキップ（生成済み）: {audio_path.name} ({duration:.1f}秒)")
             results.append({"scene_id": scene["id"], "path": audio_path, "duration": duration})
@@ -104,8 +142,44 @@ def check_voicevox_available(voicevox_url: str = VOICEVOX_URL) -> bool:
     try:
         resp = requests.get(f"{voicevox_url}/version", timeout=5)
         return resp.status_code == 200
-    except requests.ConnectionError:
+    except requests.RequestException:
         return False
+
+
+def ensure_voicevox(
+    voicevox_url: str = VOICEVOX_URL,
+    exe_path: str = VOICEVOX_EXE_PATH,
+    timeout: int = VOICEVOX_BOOT_TIMEOUT,
+) -> bool:
+    """VOICEVOXが未起動なら自動起動し、APIが応答するまで待つ
+
+    Returns:
+        使える状態になったらTrue
+    """
+    if check_voicevox_available(voicevox_url):
+        return True
+
+    if not Path(exe_path).exists():
+        logger.error(f"VOICEVOXが見つかりません: {exe_path}")
+        return False
+
+    logger.info(f"VOICEVOXを自動起動します: {exe_path}")
+    # 親プロセス終了に巻き込まれないよう切り離して起動
+    subprocess.Popen(
+        [exe_path],
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+        close_fds=True,
+    )
+
+    start = time.time()
+    while time.time() - start < timeout:
+        if check_voicevox_available(voicevox_url):
+            logger.info(f"VOICEVOX起動完了（{time.time() - start:.0f}秒）")
+            return True
+        time.sleep(3)
+
+    logger.error(f"VOICEVOXの起動がタイムアウトしました（{timeout}秒）")
+    return False
 
 
 def list_speakers(voicevox_url: str = VOICEVOX_URL) -> list[dict]:

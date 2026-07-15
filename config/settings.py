@@ -1,5 +1,6 @@
 """プロジェクト全体の設定"""
 
+import os
 from pathlib import Path
 
 # === パス ===
@@ -15,6 +16,9 @@ VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
 VIDEO_FPS = 30
 VIDEO_CODEC = "libx264"
+# 中身は静止画のスライドショーで動きが無く、圧縮しやすい。
+# 遅いpresetにしても画質はほぼ変わらず時間だけ延びるのでveryfast。
+VIDEO_PRESET = "veryfast"
 AUDIO_CODEC = "aac"
 AUDIO_BITRATE = "192k"
 
@@ -29,15 +33,30 @@ SUBTITLE_MAX_CHARS_PER_LINE = 22  # 1行あたりの最大文字数
 TARGET_SCENES = 70  # 目標シーン数（30分 ≈ 70シーン × 25秒）
 SCENE_DURATION_SEC = 25  # シーンあたりの平均秒数
 
-# === 画像生成設定 ===
-IMAGE_WIDTH = 1920
-IMAGE_HEIGHT = 1080
-IMAGE_STYLE = "photorealistic Japanese drama scene"
+# 台本＝商品の中核なので品質重視のpro。テーマ出しは軽いのでflash。
+# ※バージョン直書き（gemini-2.0-flash / 2.5系）は提供終了で404になった実績があるため、
+#   自動で新版に追従する -latest エイリアスを使う（2026-07-15に疎通確認済み）。
+SCRIPT_MODEL = "gemini-pro-latest"
+THEME_MODEL = "gemini-flash-latest"
+SCRIPT_MAX_OUTPUT_TOKENS = 65536  # 70シーンのJSONは長い。途中で切れると復旧不能
+
+# === 画像生成設定（KIEAI / Nano Banana）===
+# nano-banana     : 2クレジット/枚・~1MP。背景素材はこれで十分（70シーンで約140クレジット）
+# nano-banana-pro : 8-16クレジット/枚・最大4K。高品質だが70シーンだとコストが跳ね上がる
+IMAGE_MODEL = "nano-banana"
+IMAGE_ASPECT_RATIO = "16:9"
+IMAGE_RESOLUTION = "2K"  # pro指定時のみ有効（1K/2K/4K）
+# 画風の指定は config/prompts.py 側で台本の image_prompt に埋め込ませている
 
 # === 音声設定 ===
 VOICEVOX_URL = "http://localhost:50021"
+# 未起動なら自動起動する。別PCではVOICEVOX_EXE_PATHを環境変数で上書きする
+VOICEVOX_EXE_PATH = os.getenv("VOICEVOX_EXE_PATH", r"D:\App\VOICEVOX\VOICEVOX.exe")
+VOICEVOX_BOOT_TIMEOUT = 120  # 起動待ちの上限（秒）
 VOICEVOX_SPEAKER_ID = 2  # 四国めたん（ノーマル）- 女性アナウンサー風
 VOICEVOX_SPEED = 1.1  # やや早め（ドラマナレーション風）
+# VOICEVOXの既定は24kHz。動画の音声トラック(44.1kHz)と合わせておくと再変換が挟まらない
+AUDIO_SAMPLE_RATE = 44100
 
 # === BGM設定 ===
 BGM_VOLUME = 0.08  # BGM音量（ナレーション比）

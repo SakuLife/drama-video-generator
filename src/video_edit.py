@@ -1,15 +1,15 @@
 """ステージ4: moviepyによる動画合成"""
 
 import logging
+import os
+import wave
 from pathlib import Path
 
 import numpy as np
+from moviepy.audio.AudioClip import AudioArrayClip
 from moviepy.editor import (
     AudioFileClip,
-    ColorClip,
-    CompositeVideoClip,
     ImageClip,
-    TextClip,
     concatenate_audioclips,
     concatenate_videoclips,
 )
@@ -18,6 +18,7 @@ from PIL import Image, ImageDraw, ImageFont
 from config.settings import (
     AUDIO_BITRATE,
     AUDIO_CODEC,
+    AUDIO_SAMPLE_RATE,
     BGM_VOLUME,
     SUBTITLE_BG_COLOR,
     SUBTITLE_FONT_COLOR,
@@ -27,6 +28,7 @@ from config.settings import (
     VIDEO_CODEC,
     VIDEO_FPS,
     VIDEO_HEIGHT,
+    VIDEO_PRESET,
     VIDEO_WIDTH,
 )
 
@@ -52,7 +54,6 @@ def _create_subtitle_frame(
 ) -> np.ndarray:
     """字幕画像をPillowで生成（透過背景付き）"""
     wrapped = _wrap_text(text)
-    line_count = wrapped.count("\n") + 1
 
     # フォント設定
     if font_path and Path(font_path).exists():
@@ -78,7 +79,6 @@ def _create_subtitle_frame(
     text_h = bbox[3] - bbox[1]
 
     # 背景バー作成
-    padding_x = 40
     padding_y = 20
     bar_w = width
     bar_h = text_h + padding_y * 2
@@ -89,9 +89,68 @@ def _create_subtitle_frame(
     # テキスト中央配置
     x = (bar_w - text_w) // 2
     y = padding_y
-    draw.multiline_text((x, y), wrapped, font=font, fill="white", align="center")
+    draw.multiline_text((x, y), wrapped, font=font, fill=SUBTITLE_FONT_COLOR, align="center")
 
     return np.array(img)
+
+
+def _load_audio_as_clip(audio_path: Path, lead: float, total_duration: float) -> AudioArrayClip:
+    """WAVを読み込み、前後を無音で埋めた総尺ぶんの音声クリップにする
+
+    moviepyのconcatenate_videoclipsは各クリップの音声にset_start()を掛け直すため、
+    クリップ側で付けた開始オフセットは失われ、映像より短い音声を終端超えで読んで
+    IOErrorになる。音声を最初から総尺ぶんの配列にしておけばこの問題は起きない。
+
+    Args:
+        audio_path: 読み込むWAV
+        lead: 先頭に入れる無音の秒数
+        total_duration: 生成するクリップの総尺（秒）
+    """
+    with wave.open(str(audio_path), "rb") as wf:
+        rate = wf.getframerate()
+        channels = wf.getnchannels()
+        sample_width = wf.getsampwidth()
+        raw = wf.readframes(wf.getnframes())
+
+    if sample_width != 2:
+        raise ValueError(f"想定外のWAV量子化ビット数: {sample_width * 8}bit（16bitのみ対応）")
+
+    # int16 → -1.0〜1.0 のfloatへ
+    samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    samples = samples.reshape(-1, channels)
+    if channels == 1:
+        samples = np.repeat(samples, 2, axis=1)  # ステレオ化
+    elif channels > 2:
+        samples = samples[:, :2]
+
+    total_frames = int(round(total_duration * rate))
+    lead_frames = int(round(lead * rate))
+
+    buffer = np.zeros((total_frames, 2), dtype=np.float32)
+    end = min(lead_frames + samples.shape[0], total_frames)
+    buffer[lead_frames:end] = samples[: end - lead_frames]
+
+    return AudioArrayClip(buffer, fps=rate)
+
+
+def _render_scene_frame(
+    image_path: Path,
+    narration_text: str,
+    font_path: str | None = None,
+) -> np.ndarray:
+    """背景画像に字幕を焼き込んだ1枚の完成フレームを作る
+
+    シーン内で絵は動かないので、フレームは1枚作れば足りる。
+    moviepyのCompositeVideoClipに任せると同じ絵を毎フレーム合成し直して
+    エンコードが数倍遅くなるため、ここで焼き込んでしまう。
+    """
+    frame = Image.open(image_path).convert("RGB").resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.LANCZOS)
+
+    subtitle = Image.fromarray(_create_subtitle_frame(narration_text, font_path=font_path), "RGBA")
+    y = VIDEO_HEIGHT - subtitle.height - SUBTITLE_MARGIN_BOTTOM
+    frame.paste(subtitle, (0, y), subtitle)  # RGBAをマスクにして半透明合成
+
+    return np.array(frame)
 
 
 def create_scene_clip(
@@ -100,39 +159,18 @@ def create_scene_clip(
     narration_text: str,
     duration: float,
     font_path: str | None = None,
-) -> CompositeVideoClip:
-    """1シーン分のクリップを生成"""
+) -> ImageClip:
+    """1シーン分のクリップ（字幕焼き込み済みの静止画＋音声）を生成"""
     # 余白（前後0.3秒）
     padding = 0.3
     total_duration = duration + padding * 2
 
-    # 背景画像
-    img = Image.open(image_path).convert("RGB")
-    img = img.resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.LANCZOS)
-    bg_clip = ImageClip(np.array(img)).set_duration(total_duration)
+    frame = _render_scene_frame(image_path, narration_text, font_path=font_path)
 
-    # 音声
-    audio_clip = AudioFileClip(str(audio_path))
+    # 音声（前後の余白ぶんの無音を含めて総尺と一致させる）
+    audio_clip = _load_audio_as_clip(audio_path, lead=padding, total_duration=total_duration)
 
-    # 字幕
-    subtitle_frame = _create_subtitle_frame(narration_text, font_path=font_path)
-    sub_h = subtitle_frame.shape[0]
-    subtitle_clip = (
-        ImageClip(subtitle_frame)
-        .set_duration(duration)
-        .set_start(padding)
-        .set_position(("center", VIDEO_HEIGHT - sub_h - SUBTITLE_MARGIN_BOTTOM))
-    )
-
-    # 合成
-    composite = CompositeVideoClip(
-        [bg_clip, subtitle_clip],
-        size=(VIDEO_WIDTH, VIDEO_HEIGHT),
-    )
-    composite = composite.set_audio(audio_clip.set_start(padding))
-    composite = composite.set_duration(total_duration)
-
-    return composite
+    return ImageClip(frame).set_duration(total_duration).set_audio(audio_clip)
 
 
 def compose_video(
@@ -177,9 +215,9 @@ def compose_video(
     if not clips:
         raise ValueError("有効なシーンクリップがありません")
 
-    # 全シーン結合
+    # 全シーン結合（全クリップが同サイズなのでchainで十分。composeより速い）
     logger.info(f"シーン結合中: {len(clips)}クリップ")
-    final = concatenate_videoclips(clips, method="compose")
+    final = concatenate_videoclips(clips, method="chain")
 
     # BGM追加
     if bgm_path and bgm_path.exists():
@@ -189,7 +227,8 @@ def compose_video(
         if bgm.duration < final.duration:
             loops = int(final.duration / bgm.duration) + 1
             bgm = concatenate_audioclips([bgm] * loops)
-        bgm = bgm.subclip(0, final.duration).volumex(BGM_VOLUME)
+        # 終端ぴったりだとreaderが末尾を読み越してIOErrorになるため僅かに短く切る
+        bgm = bgm.subclip(0, max(0, final.duration - 0.1)).volumex(BGM_VOLUME)
 
         # ナレーション + BGM をミックス
         from moviepy.audio.AudioClip import CompositeAudioClip
@@ -197,14 +236,17 @@ def compose_video(
         final = final.set_audio(mixed_audio)
 
     # 書き出し
-    logger.info(f"エンコード開始: {output_path}")
+    duration_min = final.duration / 60
+    logger.info(f"エンコード開始: {output_path}（{duration_min:.1f}分）")
     final.write_videofile(
         str(output_path),
         fps=VIDEO_FPS,
         codec=VIDEO_CODEC,
+        preset=VIDEO_PRESET,
         audio_codec=AUDIO_CODEC,
         audio_bitrate=AUDIO_BITRATE,
-        threads=4,
+        audio_fps=AUDIO_SAMPLE_RATE,
+        threads=os.cpu_count() or 4,
         logger=None,
     )
 
@@ -213,6 +255,5 @@ def compose_video(
     for clip in clips:
         clip.close()
 
-    duration_min = final.duration / 60
     logger.info(f"動画合成完了: {output_path} ({duration_min:.1f}分)")
     return output_path

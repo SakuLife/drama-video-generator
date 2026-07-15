@@ -1,99 +1,114 @@
-"""ステージ2: Nano Banana (KIEAI) によるシーン画像生成"""
+"""ステージ2: Nano Banana (KIEAI) によるシーン画像生成
+
+APIの実装は本社の共有クライアント（_shared/skills/kieai）に委譲する。
+エンドポイント仕様・ポーリング形式はそちらが正（自前実装で二重管理しない）。
+"""
 
 import logging
+import os
+import sys
 import time
 from pathlib import Path
 
-import requests
+from PIL import Image
 
-from config.settings import IMAGE_HEIGHT, IMAGE_WIDTH
+# PythonSystem（本社ルート）をパスに追加して共有スキルを読む
+_COMPANY_ROOT = Path(__file__).resolve().parents[2]
+if str(_COMPANY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_COMPANY_ROOT))
+
+from _shared.skills.kieai import KieAIClient, download_file  # noqa: E402
+
+from config.settings import IMAGE_ASPECT_RATIO, IMAGE_MODEL, IMAGE_RESOLUTION  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-KIEAI_API_URL = "https://api.kieai.com/v1"
+
+def _download_atomic(url: str, output_path: Path) -> None:
+    """一時ファイルに落としてから正式名にリネームする
+
+    直接書き込むと、途中で落ちたとき壊れたPNGが正式名で残る。
+    次回実行は「生成済み」と見なしてスキップし、動画合成で初めて壊れて気付くことになる。
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = output_path.with_suffix(output_path.suffix + ".part")
+
+    download_file(url, str(tmp_path))
+
+    # 壊れた画像を掴まないよう、正式名にする前に開けることを確かめる
+    try:
+        with Image.open(tmp_path) as img:
+            img.verify()
+    except Exception as e:
+        tmp_path.unlink(missing_ok=True)
+        raise RuntimeError(f"ダウンロードした画像が壊れています: {e}") from e
+
+    os.replace(tmp_path, output_path)
+
+
+def _is_valid_image(path: Path) -> bool:
+    """再開時に「生成済み」と見なしてよい画像か（壊れていれば作り直す）"""
+    if not path.exists():
+        return False
+    try:
+        with Image.open(path) as img:
+            img.verify()
+        return True
+    except Exception:
+        logger.warning(f"壊れた画像を検出。作り直します: {path.name}")
+        return False
 
 
 def generate_image(
     api_key: str,
     prompt: str,
     output_path: Path,
-    width: int = IMAGE_WIDTH,
-    height: int = IMAGE_HEIGHT,
     retries: int = 3,
+    model: str = IMAGE_MODEL,
 ) -> Path:
-    """Nano Banana APIで画像を1枚生成"""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    """Nano Banana APIで画像を1枚生成して保存する
 
-    # タスク作成
-    payload = {
-        "model": "nano-banana",
-        "prompt": prompt,
-        "width": width,
-        "height": height,
-        "num_images": 1,
-    }
+    Args:
+        api_key: KIEAI APIキー
+        prompt: 画像生成プロンプト（英語）
+        output_path: 保存先
+        retries: 失敗時のリトライ回数
+        model: "nano-banana"（2クレジット/枚）or "nano-banana-pro"（8-16クレジット/枚）
+
+    Returns:
+        保存した画像のパス
+    """
+    client = KieAIClient(api_key=api_key)
+
+    # 生成は課金対象。ダウンロードだけ失敗したときに作り直すと二重課金になるため、
+    # 一度URLが取れたら以降のリトライでは生成をやり直さない。
+    image_url: str | None = None
 
     for attempt in range(retries):
         try:
-            # タスク送信
-            resp = requests.post(
-                f"{KIEAI_API_URL}/images/generations",
-                headers=headers,
-                json=payload,
-                timeout=30,
-            )
-            resp.raise_for_status()
-            result = resp.json()
+            if image_url is None:
+                if model == "nano-banana-pro":
+                    image_url = client.generate_nanobanana_pro(
+                        prompt=prompt,
+                        aspect_ratio=IMAGE_ASPECT_RATIO,
+                        resolution=IMAGE_RESOLUTION,
+                    )
+                else:
+                    image_url = client.generate_nanobanana(
+                        prompt=prompt,
+                        aspect_ratio=IMAGE_ASPECT_RATIO,
+                    )
 
-            # タスクIDで結果をポーリング
-            task_id = result.get("task_id")
-            if task_id:
-                image_url = _poll_task(headers, task_id)
-            else:
-                # 直接URLが返る場合
-                image_url = result["data"][0]["url"]
-
-            # 画像ダウンロード
-            img_resp = requests.get(image_url, timeout=60)
-            img_resp.raise_for_status()
-
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(img_resp.content)
+            _download_atomic(image_url, output_path)
             logger.info(f"画像保存: {output_path.name}")
             return output_path
 
         except Exception as e:
             logger.warning(f"画像生成リトライ {attempt + 1}/{retries}: {e}")
             if attempt < retries - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
             else:
                 raise
-
-
-def _poll_task(headers: dict, task_id: str, timeout: int = 120) -> str:
-    """タスク完了をポーリングして画像URLを取得"""
-    start = time.time()
-    while time.time() - start < timeout:
-        resp = requests.get(
-            f"{KIEAI_API_URL}/images/tasks/{task_id}",
-            headers=headers,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-
-        status = result.get("status")
-        if status == "completed":
-            return result["data"][0]["url"]
-        elif status == "failed":
-            raise RuntimeError(f"画像生成失敗: {result.get('error', 'unknown')}")
-
-        time.sleep(3)
-
-    raise TimeoutError(f"画像生成タイムアウト: task_id={task_id}")
 
 
 def generate_all_images(
@@ -101,8 +116,9 @@ def generate_all_images(
     script: dict,
     output_dir: Path,
     delay: float = 1.0,
+    model: str = IMAGE_MODEL,
 ) -> list[Path]:
-    """台本の全シーン画像を生成"""
+    """台本の全シーン画像を生成する（生成済みはスキップ＝再開可能）"""
     images_dir = output_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
@@ -113,8 +129,8 @@ def generate_all_images(
     for i, scene in enumerate(scenes):
         image_path = images_dir / f"scene_{scene['id']:03d}.png"
 
-        # 既に生成済みならスキップ
-        if image_path.exists():
+        # 既に生成済みならスキップ（クレジットの無駄打ちを防ぐ）
+        if _is_valid_image(image_path):
             logger.info(f"スキップ（生成済み）: {image_path.name}")
             image_paths.append(image_path)
             continue
@@ -122,7 +138,7 @@ def generate_all_images(
         prompt = scene["image_prompt"]
         logger.info(f"画像生成 [{i + 1}/{total}]: {prompt[:60]}...")
 
-        generate_image(api_key, prompt, image_path)
+        generate_image(api_key, prompt, image_path, model=model)
         image_paths.append(image_path)
 
         # レート制限対策

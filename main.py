@@ -12,12 +12,15 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+# 中央シークレット（_shared/secrets/.env）で未設定キーを穴埋め（ローカル.env優先）
+load_dotenv(Path(__file__).resolve().parents[1] / "_shared" / "secrets" / ".env")
 
 # プロジェクトルートをパスに追加
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config.settings import GENERATED_DIR, LOGS_DIR, TARGET_SCENES
-from src.notifier import notify_error, notify_success
+# load_dotenv後・sys.path追加後でないと読めないため、意図的にここでimportする
+from config.settings import GENERATED_DIR, LOGS_DIR, TARGET_SCENES  # noqa: E402
+from src.notifier import notify_error, notify_success  # noqa: E402
 
 JST = timezone(timedelta(hours=9))
 
@@ -51,6 +54,8 @@ def run_pipeline(
     stage: str | None = None,
     auto: bool = False,
     upload: bool = False,
+    target_scenes: int = TARGET_SCENES,
+    output_dir: Path | None = None,
 ) -> None:
     """メインパイプライン実行"""
     logger = logging.getLogger(__name__)
@@ -61,7 +66,9 @@ def run_pipeline(
     voicevox_url = os.getenv("VOICEVOX_URL", "http://localhost:50021")
     discord_webhook = os.getenv("DISCORD_WEBHOOK_URL", "")
 
-    output_dir = get_output_dir()
+    if output_dir is None:
+        output_dir = get_output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"出力先: {output_dir}")
 
     try:
@@ -80,7 +87,7 @@ def run_pipeline(
                 api_key=gemini_key,
                 theme=theme,
                 output_dir=output_dir,
-                target_scenes=TARGET_SCENES,
+                target_scenes=target_scenes,
             )
             logger.info(f"台本生成完了: {len(script['scenes'])}シーン")
 
@@ -91,8 +98,7 @@ def run_pipeline(
         if stage and stage != "script":
             script_path = output_dir / "script.json"
             if not script_path.exists():
-                logger.error(f"台本が見つかりません: {script_path}")
-                return
+                raise RuntimeError(f"台本が見つかりません: {script_path}")
             script = json.loads(script_path.read_text(encoding="utf-8"))
 
         # === ステージ2: 画像生成 ===
@@ -111,11 +117,10 @@ def run_pipeline(
 
         # === ステージ3: 音声生成 ===
         if stage in (None, "voice"):
-            from src.voice_gen import check_voicevox_available, generate_all_voices
+            from src.voice_gen import ensure_voicevox, generate_all_voices
 
-            if not check_voicevox_available(voicevox_url):
-                logger.error("VOICEVOXが起動していません。先にVOICEVOXを起動してください。")
-                return
+            if not ensure_voicevox(voicevox_url):
+                raise RuntimeError("VOICEVOXを起動できませんでした")
 
             audio_results = generate_all_voices(
                 script=script,
@@ -159,34 +164,43 @@ def run_pipeline(
             )
             logger.info(f"動画合成完了: {video_path}")
 
-            # サムネイル生成
+            # サムネイル生成（惹句はAIに作らせる。タイトルの機械切りは文が途中で切れる）
+            from src.script_gen import generate_thumbnail_text
             from src.thumbnail_gen import generate_thumbnail
 
-            first_image = output_dir / "images" / "scene_001.png"
+            first_scene_id = script["scenes"][0]["id"]
+            first_image = output_dir / "images" / f"scene_{first_scene_id:03d}.png"
             if first_image.exists():
-                thumb_text = script.get("title", "ドラマ")[:15]
+                thumb_text = generate_thumbnail_text(gemini_key, script.get("title", "ドラマ"))
                 generate_thumbnail(
                     scene_image_path=first_image,
                     text=thumb_text,
                     output_path=output_dir / "thumbnail.jpg",
                 )
+            else:
+                logger.warning(f"サムネ用の画像がないためスキップ: {first_image}")
 
             if stage == "video":
                 return
 
         # === ステージ5: YouTubeアップロード ===
-        if stage in (None, "upload") or upload:
+        # 投稿は明示指定（--upload / --stage upload）のときだけ。事故投稿を防ぐ。
+        if upload or stage == "upload":
             yt_client_id = os.getenv("YT_CLIENT_ID", "")
             yt_client_secret = os.getenv("YT_CLIENT_SECRET", "")
             yt_refresh_token = os.getenv("YT_REFRESH_TOKEN", "")
 
             if not all([yt_client_id, yt_client_secret, yt_refresh_token]):
-                logger.warning("YouTube認証情報が設定されていません。アップロードをスキップ。")
-                return
+                raise RuntimeError(
+                    "YouTube認証情報（YT_CLIENT_ID / YT_CLIENT_SECRET / YT_REFRESH_TOKEN）が未設定です。"
+                    "発行: python ../_shared/secrets/mint_youtube_token.py --target 3_drama --client-secrets <json>"
+                )
 
             from src.youtube_uploader import upload_video
 
             video_path = output_dir / "video.mp4"
+            if not video_path.exists():
+                raise RuntimeError(f"アップロードする動画がありません: {video_path}")
             thumbnail_path = output_dir / "thumbnail.jpg"
 
             result = upload_video(
@@ -211,6 +225,17 @@ def run_pipeline(
                     duration_min=sum(r["duration"] for r in audio_results) / 60,
                 )
 
+        elif stage is None:
+            # 投稿なしの通し実行＝ローカル完成を通知
+            logger.info(f"完成（未投稿）: {output_dir / 'video.mp4'}")
+            if discord_webhook:
+                notify_success(
+                    webhook_url=discord_webhook,
+                    title=script["title"],
+                    video_url=str(output_dir / "video.mp4"),
+                    duration_min=sum(r["duration"] for r in audio_results) / 60,
+                )
+
     except Exception as e:
         logger.error(f"パイプラインエラー: {e}")
         logger.error(traceback.format_exc())
@@ -231,11 +256,17 @@ def main() -> None:
     )
     parser.add_argument("--upload", action="store_true", help="YouTube自動アップロード")
     parser.add_argument("--suggest-themes", action="store_true", help="テーマ候補を表示")
+    parser.add_argument(
+        "--scenes",
+        type=int,
+        default=TARGET_SCENES,
+        help=f"生成シーン数（デフォルト: {TARGET_SCENES}＝約30分。動作確認は少なめに）",
+    )
+    parser.add_argument("--output-dir", type=str, help="出力先を明示指定（検証用）")
 
     args = parser.parse_args()
 
     setup_logging()
-    logger = logging.getLogger(__name__)
 
     if args.suggest_themes:
         from src.script_gen import suggest_themes
@@ -249,7 +280,8 @@ def main() -> None:
             print(f"   あらすじ: {t['synopsis']}")
         return
 
-    if not args.theme and not args.auto:
+    # テーマが要るのは台本を作るときだけ。以降のステージは保存済みscript.jsonから再開する。
+    if args.stage in (None, "script") and not args.theme and not args.auto:
         parser.error("--theme または --auto を指定してください（--suggest-themes でテーマ候補表示）")
 
     run_pipeline(
@@ -257,6 +289,8 @@ def main() -> None:
         stage=args.stage,
         auto=args.auto,
         upload=args.upload,
+        target_scenes=args.scenes,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
     )
 
 

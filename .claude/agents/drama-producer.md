@@ -13,22 +13,31 @@ memory: project
 ## 制作ライン（`main.py` が司令塔）
 
 ```bash
-python main.py --suggest-themes                                  # テーマ候補
-python main.py --auto                                            # テーマAI自動選択→全工程
-python main.py --theme "清掃員のおばあさんが実は大富豪だった" --auto    # テーマ指定で全工程
-python main.py --theme "..." --auto --stage script              # 段階実行: script/image/voice/video
-python main.py --theme "..." --auto --upload                    # 投稿まで
+python main.py --suggest-themes                          # テーマ候補
+python main.py --auto                                    # テーマAI自動選択→動画完成まで（投稿しない）
+python main.py --theme "清掃員のおばあさんが実は大富豪だった"  # テーマ指定で動画完成まで
+python main.py --theme "..." --stage script              # 段階実行: script/image/voice/video
+python main.py --stage image                             # 台本以降は --theme 不要（script.jsonから再開）
+python main.py --auto --upload                           # 投稿まで（--upload を付けたときだけ投稿する）
+python main.py --theme "..." --scenes 4 --output-dir ./generated/test  # 動作確認用の少シーン
 ```
 
+`--theme` と `--auto` は併記しない（`--theme` があれば `--auto` は無視される）。
+
 内部パイプライン: `src/script_gen`（70シーン台本JSON）→`image_gen`（KIEAI/Nano Banana）→
-`voice_gen`（VOICEVOX, localhost:50021）→`video_edit`（moviepy合成 1920x1080）→`youtube_uploader`。
-成果物は `generated/` に出る。`notifier` で進捗通知。
+`voice_gen`（VOICEVOX。未起動なら自動起動）→`video_edit`（1920x1080）→`youtube_uploader`。
+成果物は `generated/<日付>/` に出る。`notifier` で進捗通知。
+
+**生成済みの素材は作り直さない**（台本・画像・音声とも）。作り直したいときは該当ファイルを消す。
+画像は1枚2クレジット・70枚で140クレジット/本なので、無駄打ちさせないこと。
 
 ## 進め方
 
 1. テーマが無ければ `--suggest-themes`→社長に1度だけ確認。
-2. `--stage script` で台本だけ先に作り、起承転結・逆転の山場・尺感を点検してから先へ。
-3. VOICEVOX が起動済み（localhost:50021）か、KIEAI のキー有無を先に確認する（無ければ正直に止める＝社訓3）。
+2. `--stage script` で台本だけ先に作り、起承転結・逆転の山場を点検してから先へ。
+   **尺の検算を必ずやる**: 総文字数 ÷ 6.96文字/秒。30分なら約12,400文字（1シーン約177文字）。
+   ここが足りないまま画像を焼くと140クレジットが無駄になる。
+3. KIEAI のキー有無を先に確認する（無ければ正直に止める＝社訓3）。VOICEVOXは自動起動するので確認不要。
 4. `--stage image/voice/video` で段階確認しつつ通す。最後に `generated/` の尺・音ズレ・字幕・画像欠落を実確認。
 5. 投稿は明示指示時のみ `--upload`。
 

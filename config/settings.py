@@ -28,6 +28,9 @@ SUBTITLE_FONT_COLOR = "white"
 SUBTITLE_BG_COLOR = (0, 0, 0, 180)  # 半透明黒
 SUBTITLE_MARGIN_BOTTOM = 60
 SUBTITLE_MAX_CHARS_PER_LINE = 22  # 1行あたりの最大文字数
+# 字幕1枚あたりの上限。ナレーションは文単位で切るが、1文が長すぎると
+# 行数が増えて画面を覆うため、これを超える文は読点でさらに分割する（22文字×3行想定）
+SUBTITLE_MAX_CHARS_PER_SEGMENT = 66
 
 # === 台本設定 ===
 TARGET_SCENES = 70  # 目標シーン数（30分 ≈ 70シーン × 25秒）
@@ -38,7 +41,9 @@ SCENE_DURATION_SEC = 25  # シーンあたりの平均秒数
 #   自動で新版に追従する -latest エイリアスを使う（2026-07-15に疎通確認済み）。
 SCRIPT_MODEL = "gemini-pro-latest"
 THEME_MODEL = "gemini-flash-latest"
-SCRIPT_MAX_OUTPUT_TOKENS = 65536  # 70シーンのJSONは長い。途中で切れると復旧不能
+# JSONは途中で切れると壊れて復旧不能。上限は余裕を持たせる（70シーンで実測3万程度）
+SCRIPT_MAX_OUTPUT_TOKENS = 65536
+THEME_MAX_OUTPUT_TOKENS = 8192  # 未指定だと既定値で切れてJSONDecodeErrorになる
 
 # === 画像生成設定（KIEAI / Nano Banana）===
 # nano-banana     : 2クレジット/枚・~1MP。背景素材はこれで十分（70シーンで約140クレジット）
@@ -50,7 +55,10 @@ IMAGE_RESOLUTION = "2K"  # pro指定時のみ有効（1K/2K/4K）
 
 # === 音声設定 ===
 VOICEVOX_URL = "http://localhost:50021"
-# 未起動なら自動起動する。別PCではVOICEVOX_EXE_PATHを環境変数で上書きする
+# 未起動なら自動起動する。別PCでは環境変数で上書きする。
+# エンジン単体(run.exe)を優先＝GUI不要・画面セッション不要なので無人実行やCIで確実に動く。
+# 見つからないときだけGUI版にフォールバックする。
+VOICEVOX_ENGINE_PATH = os.getenv("VOICEVOX_ENGINE_PATH", r"D:\App\VOICEVOX\vv-engine\run.exe")
 VOICEVOX_EXE_PATH = os.getenv("VOICEVOX_EXE_PATH", r"D:\App\VOICEVOX\VOICEVOX.exe")
 VOICEVOX_BOOT_TIMEOUT = 120  # 起動待ちの上限（秒）
 VOICEVOX_SPEAKER_ID = 2  # 四国めたん（ノーマル）- 女性アナウンサー風

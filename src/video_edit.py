@@ -133,44 +133,59 @@ def _load_audio_as_clip(audio_path: Path, lead: float, total_duration: float) ->
     return AudioArrayClip(buffer, fps=rate)
 
 
-def _render_scene_frame(
-    image_path: Path,
-    narration_text: str,
+def _load_background(image_path: Path) -> Image.Image:
+    """シーン画像を動画サイズに合わせて読み込む（シーンにつき1回だけ）"""
+    return Image.open(image_path).convert("RGB").resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.LANCZOS)
+
+
+def _render_frame(
+    background: Image.Image,
+    subtitle_text: str,
     font_path: str | None = None,
 ) -> np.ndarray:
-    """背景画像に字幕を焼き込んだ1枚の完成フレームを作る
+    """背景に字幕を焼き込んだ1枚の完成フレームを作る
 
-    シーン内で絵は動かないので、フレームは1枚作れば足りる。
+    絵は字幕が変わる間も動かないので、フレームは字幕1枚につき1枚作れば足りる。
     moviepyのCompositeVideoClipに任せると同じ絵を毎フレーム合成し直して
-    エンコードが数倍遅くなるため、ここで焼き込んでしまう。
+    エンコードが十数倍遅くなるため、ここで焼き込んでしまう。
     """
-    frame = Image.open(image_path).convert("RGB").resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.LANCZOS)
+    frame = background.copy()
 
-    subtitle = Image.fromarray(_create_subtitle_frame(narration_text, font_path=font_path), "RGBA")
+    subtitle = Image.fromarray(_create_subtitle_frame(subtitle_text, font_path=font_path), "RGBA")
     y = VIDEO_HEIGHT - subtitle.height - SUBTITLE_MARGIN_BOTTOM
     frame.paste(subtitle, (0, y), subtitle)  # RGBAをマスクにして半透明合成
 
     return np.array(frame)
 
 
-def create_scene_clip(
+def create_scene_clips(
     image_path: Path,
-    audio_path: Path,
-    narration_text: str,
-    duration: float,
+    segments: list[dict],
     font_path: str | None = None,
-) -> ImageClip:
-    """1シーン分のクリップ（字幕焼き込み済みの静止画＋音声）を生成"""
-    # 余白（前後0.3秒）
-    padding = 0.3
-    total_duration = duration + padding * 2
+    padding: float = 0.3,
+) -> list[ImageClip]:
+    """1シーン分のクリップ列を生成する
 
-    frame = _render_scene_frame(image_path, narration_text, font_path=font_path)
+    同じ絵の上で字幕だけが切り替わるので、字幕1枚 = 静止画クリップ1つ。
+    尺はその字幕の音声の実尺そのものなので、字幕と声がズレない。
+    シーンの前後にだけ無音の余白を入れる（字幕ごとに空けると間延びするため）。
+    """
+    background = _load_background(image_path)
+    clips = []
+    last = len(segments) - 1
 
-    # 音声（前後の余白ぶんの無音を含めて総尺と一致させる）
-    audio_clip = _load_audio_as_clip(audio_path, lead=padding, total_duration=total_duration)
+    for i, seg in enumerate(segments):
+        lead = padding if i == 0 else 0.0
+        trail = padding if i == last else 0.0
+        total_duration = seg["duration"] + lead + trail
 
-    return ImageClip(frame).set_duration(total_duration).set_audio(audio_clip)
+        frame = _render_frame(background, seg["text"], font_path=font_path)
+        audio_clip = _load_audio_as_clip(
+            seg["path"], lead=lead, total_duration=total_duration
+        )
+        clips.append(ImageClip(frame).set_duration(total_duration).set_audio(audio_clip))
+
+    return clips
 
 
 def compose_video(
@@ -187,9 +202,10 @@ def compose_video(
 
     logger.info(f"動画合成開始: {len(scenes)}シーン")
 
-    # シーンクリップ作成
+    # シーンクリップ作成（字幕1枚につき静止画1つ）
     clips = []
     audio_map = {r["scene_id"]: r for r in audio_results}
+    skipped = []
 
     for scene in scenes:
         scene_id = scene["id"]
@@ -197,20 +213,23 @@ def compose_video(
         audio_info = audio_map.get(scene_id)
 
         if not image_path.exists():
-            logger.warning(f"画像なし、スキップ: scene_{scene_id:03d}")
+            skipped.append(f"scene_{scene_id:03d}(画像なし)")
             continue
-        if not audio_info:
-            logger.warning(f"音声なし、スキップ: scene_{scene_id:03d}")
+        if not audio_info or not audio_info.get("segments"):
+            skipped.append(f"scene_{scene_id:03d}(音声なし)")
             continue
 
-        clip = create_scene_clip(
-            image_path=image_path,
-            audio_path=audio_info["path"],
-            narration_text=scene["narration"],
-            duration=audio_info["duration"],
-            font_path=font_path,
+        clips.extend(
+            create_scene_clips(
+                image_path=image_path,
+                segments=audio_info["segments"],
+                font_path=font_path,
+            )
         )
-        clips.append(clip)
+
+    if skipped:
+        # 黙って飛ばすと歯抜けの動画が完成品として出てしまう
+        logger.warning(f"素材が欠けたシーンを飛ばしました（{len(skipped)}件）: {skipped[:5]}")
 
     if not clips:
         raise ValueError("有効なシーンクリップがありません")

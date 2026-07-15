@@ -134,17 +134,9 @@ def run_pipeline(
 
         # 音声メタデータ読み込み（途中再開時）
         if stage and stage not in ("script", "image", "voice"):
-            audio_dir = output_dir / "audio"
-            from src.voice_gen import get_audio_duration
+            from src.voice_gen import load_audio_results
 
-            audio_results = []
-            for scene in script["scenes"]:
-                audio_path = audio_dir / f"scene_{scene['id']:03d}.wav"
-                if audio_path.exists():
-                    duration = get_audio_duration(audio_path)
-                    audio_results.append(
-                        {"scene_id": scene["id"], "path": audio_path, "duration": duration}
-                    )
+            audio_results = load_audio_results(script, output_dir)
 
         # === ステージ4: 動画合成 ===
         if stage in (None, "video"):

@@ -16,6 +16,7 @@ from config.settings import (
     SCRIPT_MAX_OUTPUT_TOKENS,
     SCRIPT_MODEL,
     TARGET_SCENES,
+    THEME_MAX_OUTPUT_TOKENS,
     THEME_MODEL,
 )
 
@@ -25,20 +26,66 @@ logger = logging.getLogger(__name__)
 REQUIRED_SCENE_KEYS = ("id", "narration", "image_prompt")
 
 
+def _generate_json(
+    model_name: str,
+    prompt: str,
+    temperature: float,
+    max_output_tokens: int,
+    retries: int = 3,
+) -> dict | list:
+    """GeminiにJSONを生成させて辞書/配列で返す
+
+    応答が出力上限で切れると壊れたJSONが返ってJSONDecodeErrorになる。
+    原因を明示しつつ、一時的なブレなら作り直せるようリトライする。
+    """
+    model = genai.GenerativeModel(model_name)
+    last_error: Exception | None = None
+
+    for attempt in range(retries):
+        try:
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    temperature=temperature,
+                    response_mime_type="application/json",
+                    max_output_tokens=max_output_tokens,
+                ),
+            )
+
+            reason = response.candidates[0].finish_reason.name
+            if reason == "MAX_TOKENS":
+                raise ValueError(
+                    f"出力が上限({max_output_tokens}トークン)で切れました。JSONとして不完全です。"
+                )
+            if reason not in ("STOP", "FINISH_REASON_UNSPECIFIED"):
+                raise ValueError(f"生成が異常終了しました: finish_reason={reason}")
+
+            return json.loads(response.text)
+
+        except (json.JSONDecodeError, ValueError) as e:
+            last_error = e
+            logger.warning(f"JSON生成リトライ {attempt + 1}/{retries}（{model_name}）: {e}")
+
+    raise RuntimeError(f"JSON生成に{retries}回失敗しました（{model_name}）: {last_error}")
+
+
 def suggest_themes(api_key: str, count: int = 5) -> list[dict]:
     """AIにドラマテーマを提案させる"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(THEME_MODEL)
 
-    response = model.generate_content(
-        THEME_SUGGESTION_PROMPT,
-        generation_config=genai.GenerationConfig(
-            temperature=1.0,
-            response_mime_type="application/json",
-        ),
+    themes = _generate_json(
+        model_name=THEME_MODEL,
+        prompt=THEME_SUGGESTION_PROMPT,
+        temperature=1.0,
+        max_output_tokens=THEME_MAX_OUTPUT_TOKENS,
     )
 
-    themes = json.loads(response.text)
+    if not isinstance(themes, list) or not themes:
+        raise ValueError(f"テーマ候補が配列で返りませんでした: {type(themes).__name__}")
+    for t in themes:
+        if not t.get("title"):
+            raise ValueError("テーマ候補にtitleがありません")
+
     logger.info(f"テーマ提案完了: {len(themes)}件")
     return themes[:count]
 
@@ -78,7 +125,6 @@ def generate_script(
 ) -> dict:
     """ドラマ台本を生成してJSONで保存"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(SCRIPT_MODEL)
 
     prompt = SCRIPT_GENERATION_PROMPT.format(
         theme=theme,
@@ -86,26 +132,12 @@ def generate_script(
     )
 
     logger.info(f"台本生成開始（{SCRIPT_MODEL}）: {theme}")
-    response = model.generate_content(
-        prompt,
-        generation_config=genai.GenerationConfig(
-            temperature=0.8,
-            response_mime_type="application/json",
-            max_output_tokens=SCRIPT_MAX_OUTPUT_TOKENS,
-        ),
+    script = _generate_json(
+        model_name=SCRIPT_MODEL,
+        prompt=prompt,
+        temperature=0.8,
+        max_output_tokens=SCRIPT_MAX_OUTPUT_TOKENS,
     )
-
-    # 出力がトークン上限で切れるとJSONが壊れる。原因を明示して落とす。
-    candidate = response.candidates[0]
-    if candidate.finish_reason.name == "MAX_TOKENS":
-        raise ValueError(
-            f"台本が長すぎて出力上限で切れました（SCRIPT_MAX_OUTPUT_TOKENS={SCRIPT_MAX_OUTPUT_TOKENS}）。"
-            "シーン数を減らすか上限を上げてください。"
-        )
-    if candidate.finish_reason.name not in ("STOP", "FINISH_REASON_UNSPECIFIED"):
-        raise ValueError(f"台本生成が異常終了: finish_reason={candidate.finish_reason.name}")
-
-    script = json.loads(response.text)
 
     _validate_script(script, target_scenes)
 

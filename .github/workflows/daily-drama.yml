@@ -1,0 +1,81 @@
+name: Daily Drama Video Generation
+
+on:
+  schedule:
+    # 毎日 06:00 UTC = 15:00 JST（18:00公開に間に合うよう3時間前に実行）
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      theme:
+        description: 'ドラマのテーマ（空欄でAI自動選択）'
+        required: false
+        type: string
+      upload:
+        description: 'YouTubeに投稿する'
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: drama-generation
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    # VOICEVOXがローカル(localhost:50021)必須のため、Sakuの母艦PCのランナーで動かす。
+    # ランナーはサービスではなく対話セッションで起動すること（VOICEVOXがGUIアプリのため）。
+    runs-on: self-hosted
+    timeout-minutes: 180
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # VOICEVOXの起動確認はしない。未起動なら main.py が自動起動する。
+
+      - name: Generate drama video
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          KIEAI_API_KEY: ${{ secrets.KIEAI_API_KEY }}
+          VOICEVOX_URL: http://localhost:50021
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.theme }}" ]; then
+            ARGS="--theme \"${{ github.event.inputs.theme }}\""
+          else
+            ARGS="--auto"
+          fi
+          # 手動実行でuploadをfalseにしたとき以外は投稿する（定時実行は常に投稿）
+          if [ "${{ github.event.inputs.upload }}" != "false" ]; then
+            ARGS="$ARGS --upload"
+          fi
+          eval python main.py $ARGS
+
+      # 失敗しても素材は残す（画像はクレジット消費済みなので再開に使う）
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drama-logs
+          path: logs/
+          retention-days: 7
+
+      - name: Cleanup old generated files (keep 7 days)
+        if: always()
+        run: |
+          find generated/ -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true

@@ -19,7 +19,14 @@ if str(_COMPANY_ROOT) not in sys.path:
 
 from _shared.skills.kieai import KieAIClient, download_file  # noqa: E402
 
-from config.settings import IMAGE_ASPECT_RATIO, IMAGE_MODEL, IMAGE_RESOLUTION  # noqa: E402
+from config.settings import (  # noqa: E402
+    IMAGE_ASPECT_RATIO,
+    IMAGE_MAX_CONSECUTIVE_FAILURES,
+    IMAGE_MAX_WAIT,
+    IMAGE_MODEL,
+    IMAGE_POLL_INTERVAL,
+    IMAGE_RESOLUTION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,11 +99,15 @@ def generate_image(
                         prompt=prompt,
                         aspect_ratio=IMAGE_ASPECT_RATIO,
                         resolution=IMAGE_RESOLUTION,
+                        max_wait=IMAGE_MAX_WAIT,
+                        poll_interval=IMAGE_POLL_INTERVAL,
                     )
                 else:
                     image_url = client.generate_nanobanana(
                         prompt=prompt,
                         aspect_ratio=IMAGE_ASPECT_RATIO,
+                        max_wait=IMAGE_MAX_WAIT,
+                        poll_interval=IMAGE_POLL_INTERVAL,
                     )
 
             _download_atomic(image_url, output_path)
@@ -123,6 +134,8 @@ def generate_all_images(
     images_dir.mkdir(parents=True, exist_ok=True)
 
     image_paths = []
+    failed: list[tuple[int, str]] = []
+    consecutive_failures = 0
     scenes = script["scenes"]
     total = len(scenes)
 
@@ -138,12 +151,37 @@ def generate_all_images(
         prompt = scene["image_prompt"]
         logger.info(f"画像生成 [{i + 1}/{total}]: {prompt[:60]}...")
 
-        generate_image(api_key, prompt, image_path, model=model)
-        image_paths.append(image_path)
+        # 1枚の失敗で残り全部を諦めない。失敗は覚えておいて最後にまとめて報告し、
+        # 成功したぶんは残す（再実行時はスキップされるので焼き直しにならない）。
+        try:
+            generate_image(api_key, prompt, image_path, model=model)
+            image_paths.append(image_path)
+            consecutive_failures = 0
+        except Exception as e:
+            consecutive_failures += 1
+            failed.append((scene["id"], str(e)[:120]))
+            logger.error(f"画像生成に失敗 scene_{scene['id']:03d}（続行します）: {e}")
+
+            # クレジット切れ等、続けても無駄なときは打ち切る
+            if consecutive_failures >= IMAGE_MAX_CONSECUTIVE_FAILURES:
+                raise RuntimeError(
+                    f"画像生成が{consecutive_failures}回連続で失敗しました。"
+                    f"APIキー・クレジット残高を確認してください。最後のエラー: {e}"
+                ) from e
 
         # レート制限対策
         if i < total - 1:
             time.sleep(delay)
 
-    logger.info(f"全画像生成完了: {len(image_paths)}枚")
+    logger.info(f"画像生成: 成功{len(image_paths)}枚 / 失敗{len(failed)}枚（全{total}シーン）")
+
+    if failed:
+        # 歯抜けのまま動画にすると欠けたシーンの動画が完成品として出てしまう。
+        # 成功したぶんは保存済みなので、再実行すれば失敗分だけ作り直される。
+        ids = ", ".join(f"scene_{sid:03d}" for sid, _ in failed[:10])
+        raise RuntimeError(
+            f"{len(failed)}枚の画像を生成できませんでした（{ids}）。"
+            "同じコマンドで再実行すれば、失敗した分だけ作り直します。"
+        )
+
     return image_paths

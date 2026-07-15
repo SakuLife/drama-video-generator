@@ -51,6 +51,13 @@ THEME_MAX_OUTPUT_TOKENS = 8192  # 未指定だと既定値で切れてJSONDecode
 IMAGE_MODEL = "nano-banana"
 IMAGE_ASPECT_RATIO = "16:9"
 IMAGE_RESOLUTION = "2K"  # pro指定時のみ有効（1K/2K/4K）
+# 実測21秒/枚。共有クライアントの既定600秒は長すぎて、KIEAI側でタスクが固まると
+# 1枚に10分×リトライ分ぶら下がる（実際に30分待たされて全体が落ちた）。
+# 早めに見切って作り直した方が速い。
+IMAGE_MAX_WAIT = 150  # 1タスクの待ち上限（秒）
+IMAGE_POLL_INTERVAL = 5  # 完了確認の間隔（秒）
+# 連続でこれだけ失敗したら打ち切る（クレジット切れ等、続けても無駄なとき）
+IMAGE_MAX_CONSECUTIVE_FAILURES = 3
 # 画風の指定は config/prompts.py 側で台本の image_prompt に埋め込ませている
 
 # === 音声設定 ===

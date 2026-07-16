@@ -206,9 +206,8 @@ def run_pipeline(
 
             from src.youtube_uploader import upload_video
 
+            # 動画の実体チェック（壊れ・無音・短すぎ）は upload_video 側の verify_video が行う
             video_path = output_dir / "video.mp4"
-            if not video_path.exists():
-                raise RuntimeError(f"アップロードする動画がありません: {video_path}")
             thumbnail_path = output_dir / "thumbnail.jpg"
 
             result = upload_video(

@@ -1,6 +1,8 @@
 """YouTube自動アップロード"""
 
+import json
 import logging
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -13,6 +15,55 @@ from config.settings import YT_CATEGORY_ID, YT_DEFAULT_TAGS, YT_MADE_FOR_KIDS, Y
 logger = logging.getLogger(__name__)
 
 JST = timezone(timedelta(hours=9))
+
+
+def verify_video(video_path: Path, min_duration_sec: float = 60.0) -> float:
+    """投稿前に動画が壊れていないか確かめる
+
+    エンコード中に落ちると、mp4は「存在するのに最後まで書かれていない」状態で残る
+    （索引のmoov atomは最後に書かれるため）。存在チェックだけでは通ってしまい、
+    壊れた動画をそのまま投稿してしまう。投稿は取り消せないので必ずここを通す。
+
+    Returns:
+        動画の尺（秒）
+
+    Raises:
+        RuntimeError: 壊れている・短すぎる・音声トラックが無い場合
+    """
+    if not video_path.exists():
+        raise RuntimeError(f"アップロードする動画がありません: {video_path}")
+
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-show_entries", "stream=codec_type",
+            "-of", "json", str(video_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"動画が壊れています（エンコード中断の可能性）: {video_path}\n{result.stderr.strip()[:200]}"
+        )
+
+    info = json.loads(result.stdout)
+    duration = float(info.get("format", {}).get("duration", 0))
+    codec_types = {s.get("codec_type") for s in info.get("streams", [])}
+
+    if "video" not in codec_types:
+        raise RuntimeError(f"映像トラックがありません: {video_path}")
+    if "audio" not in codec_types:
+        raise RuntimeError(f"音声トラックがありません（無音動画）: {video_path}")
+    if duration < min_duration_sec:
+        raise RuntimeError(
+            f"動画が短すぎます（{duration:.1f}秒 < {min_duration_sec:.0f}秒）。"
+            f"途中で切れた可能性があります: {video_path}"
+        )
+
+    logger.info(f"投稿前チェックOK: {duration / 60:.1f}分 / {video_path.stat().st_size / 1e6:.0f}MB")
+    return duration
 
 
 def get_credentials(client_id: str, client_secret: str, refresh_token: str) -> Credentials:
@@ -53,6 +104,9 @@ def upload_video(
     category_id: str = YT_CATEGORY_ID,
 ) -> dict:
     """動画をYouTubeにアップロード"""
+    # 投稿は取り消せない。壊れた動画を出さないよう、必ずここで検品してから送る
+    verify_video(video_path)
+
     if tags is None:
         tags = YT_DEFAULT_TAGS.copy()
 

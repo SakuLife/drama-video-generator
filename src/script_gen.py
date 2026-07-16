@@ -8,6 +8,8 @@ from pathlib import Path
 import google.generativeai as genai
 
 from config.prompts import (
+    IMAGE_PROMPT_SOFTEN_ESCALATION,
+    IMAGE_PROMPT_SOFTEN_PROMPT,
     SCRIPT_GENERATION_PROMPT,
     THEME_SUGGESTION_PROMPT,
     THUMBNAIL_TEXT_PROMPT,
@@ -148,6 +150,41 @@ def generate_script(
     logger.info(f"台本保存: {script_path}")
 
     return script
+
+
+def rewrite_image_prompt(api_key: str, prompt: str, attempt: int = 1) -> str:
+    """センシティブ判定で弾かれた画像プロンプトを穏当に書き直す
+
+    同じプロンプトで作り直しても必ず同じ判定になるため、表現を変えるしかない。
+    拒否が続くほど、動作描写を捨てて情景描写に寄せる。
+
+    Args:
+        api_key: Gemini APIキー
+        prompt: 拒否されたプロンプト
+        attempt: 何回目の書き直しか（2回目以降はより穏当に寄せる）
+
+    Returns:
+        書き直したプロンプト（失敗したら元のプロンプトをそのまま返す）
+    """
+    escalation = ""
+    if attempt > 1:
+        escalation = IMAGE_PROMPT_SOFTEN_ESCALATION.format(attempt=attempt)
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(THEME_MODEL)
+        response = model.generate_content(
+            IMAGE_PROMPT_SOFTEN_PROMPT.format(prompt=prompt, escalation=escalation),
+            generation_config=genai.GenerationConfig(temperature=0.9, max_output_tokens=2048),
+        )
+        rewritten = response.text.strip().strip("`").replace("\n", " ")
+        if rewritten:
+            logger.info(f"画像プロンプトを書き直しました（{attempt}回目）: {rewritten[:70]}...")
+            return rewritten
+    except Exception as e:
+        logger.warning(f"画像プロンプトの書き直しに失敗: {e}")
+
+    return prompt
 
 
 def generate_thumbnail_text(api_key: str, title: str, fallback_chars: int = 15) -> str:

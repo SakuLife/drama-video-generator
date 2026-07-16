@@ -17,7 +17,9 @@ _COMPANY_ROOT = Path(__file__).resolve().parents[2]
 if str(_COMPANY_ROOT) not in sys.path:
     sys.path.insert(0, str(_COMPANY_ROOT))
 
-from _shared.skills.kieai import KieAIClient, download_file  # noqa: E402
+from _shared.skills.kieai import KieAIClient, KieAITaskFailed, download_file  # noqa: E402
+
+from src.script_gen import rewrite_image_prompt  # noqa: E402
 
 from config.settings import (  # noqa: E402
     IMAGE_ASPECT_RATIO,
@@ -26,6 +28,7 @@ from config.settings import (  # noqa: E402
     IMAGE_MODEL,
     IMAGE_POLL_INTERVAL,
     IMAGE_RESOLUTION,
+    IMAGE_RETRIES,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,8 +73,9 @@ def generate_image(
     api_key: str,
     prompt: str,
     output_path: Path,
-    retries: int = 3,
+    retries: int = IMAGE_RETRIES,
     model: str = IMAGE_MODEL,
+    gemini_key: str = "",
 ) -> Path:
     """Nano Banana APIで画像を1枚生成して保存する
 
@@ -90,13 +94,15 @@ def generate_image(
     # 生成は課金対象。ダウンロードだけ失敗したときに作り直すと二重課金になるため、
     # 一度URLが取れたら以降のリトライでは生成をやり直さない。
     image_url: str | None = None
+    current_prompt = prompt
+    softened = 0
 
     for attempt in range(retries):
         try:
             if image_url is None:
                 if model == "nano-banana-pro":
                     image_url = client.generate_nanobanana_pro(
-                        prompt=prompt,
+                        prompt=current_prompt,
                         aspect_ratio=IMAGE_ASPECT_RATIO,
                         resolution=IMAGE_RESOLUTION,
                         max_wait=IMAGE_MAX_WAIT,
@@ -104,7 +110,7 @@ def generate_image(
                     )
                 else:
                     image_url = client.generate_nanobanana(
-                        prompt=prompt,
+                        prompt=current_prompt,
                         aspect_ratio=IMAGE_ASPECT_RATIO,
                         max_wait=IMAGE_MAX_WAIT,
                         poll_interval=IMAGE_POLL_INTERVAL,
@@ -114,12 +120,29 @@ def generate_image(
             logger.info(f"画像保存: {output_path.name}")
             return output_path
 
+        except KieAITaskFailed as e:
+            # センシティブ判定は同じプロンプトで作り直しても必ず同じ結果になる。
+            # リトライではなく、表現を穏当に書き直してから作り直す。
+            if e.is_sensitive and gemini_key:
+                softened += 1
+                logger.warning(
+                    f"センシティブ判定のため書き直します（{output_path.name} / {softened}回目）"
+                )
+                current_prompt = rewrite_image_prompt(gemini_key, current_prompt, attempt=softened)
+                if attempt >= retries - 1:
+                    raise
+                continue
+
+            logger.warning(f"画像生成リトライ {attempt + 1}/{retries}: {e}")
+            if attempt >= retries - 1:
+                raise
+            time.sleep(2**attempt)
+
         except Exception as e:
             logger.warning(f"画像生成リトライ {attempt + 1}/{retries}: {e}")
-            if attempt < retries - 1:
-                time.sleep(2**attempt)
-            else:
+            if attempt >= retries - 1:
                 raise
+            time.sleep(2**attempt)
 
 
 def generate_all_images(
@@ -128,8 +151,14 @@ def generate_all_images(
     output_dir: Path,
     delay: float = 1.0,
     model: str = IMAGE_MODEL,
+    gemini_key: str = "",
 ) -> list[Path]:
-    """台本の全シーン画像を生成する（生成済みはスキップ＝再開可能）"""
+    """台本の全シーン画像を生成する（生成済みはスキップ＝再開可能）
+
+    Args:
+        gemini_key: センシティブ判定で弾かれたプロンプトの書き直しに使う。
+            未指定だと書き直せず、そのシーンは失敗として扱う。
+    """
     images_dir = output_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
@@ -154,7 +183,7 @@ def generate_all_images(
         # 1枚の失敗で残り全部を諦めない。失敗は覚えておいて最後にまとめて報告し、
         # 成功したぶんは残す（再実行時はスキップされるので焼き直しにならない）。
         try:
-            generate_image(api_key, prompt, image_path, model=model)
+            generate_image(api_key, prompt, image_path, model=model, gemini_key=gemini_key)
             image_paths.append(image_path)
             consecutive_failures = 0
         except Exception as e:

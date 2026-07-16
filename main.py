@@ -123,6 +123,8 @@ def run_pipeline(
                 api_key=kieai_key,
                 script=script,
                 output_dir=output_dir,
+                # センシティブ判定で弾かれたプロンプトの書き直しに使う
+                gemini_key=gemini_key,
             )
             logger.info(f"画像生成完了: {len(image_paths)}枚")
 

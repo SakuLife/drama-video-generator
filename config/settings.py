@@ -56,6 +56,9 @@ IMAGE_RESOLUTION = "2K"  # pro指定時のみ有効（1K/2K/4K）
 # 早めに見切って作り直した方が速い。
 IMAGE_MAX_WAIT = 150  # 1タスクの待ち上限（秒）
 IMAGE_POLL_INTERVAL = 5  # 完了確認の間隔（秒）
+# 1枚あたりの試行回数。センシティブ判定（実測で70枚中5枚）はプロンプトを書き直して
+# やり直すため、書き直しの機会を確保できるよう多めに取る。
+IMAGE_RETRIES = 5
 # 連続でこれだけ失敗したら打ち切る（クレジット切れ等、続けても無駄なとき）
 IMAGE_MAX_CONSECUTIVE_FAILURES = 3
 # 画風の指定は config/prompts.py 側で台本の image_prompt に埋め込ませている

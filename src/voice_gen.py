@@ -17,6 +17,9 @@ from config.settings import (
     VOICEVOX_BOOT_TIMEOUT,
     VOICEVOX_ENGINE_PATH,
     VOICEVOX_EXE_PATH,
+    VOICEVOX_INTONATION,
+    VOICEVOX_POST_PHONEME,
+    VOICEVOX_PRE_PHONEME,
     VOICEVOX_SPEAKER_ID,
     VOICEVOX_SPEED,
     VOICEVOX_URL,
@@ -115,12 +118,14 @@ def generate_voice(
     query_resp.raise_for_status()
     query = query_resp.json()
 
-    # 速度調整
+    # 速度・抑揚（棒読み対策）
     query["speedScale"] = speed
-    # ピッチやイントネーション微調整（アナウンサー風）
     query["pitchScale"] = 0.0
-    query["intonationScale"] = 1.2
+    query["intonationScale"] = VOICEVOX_INTONATION
     query["volumeScale"] = 1.0
+    # 文の前後に「間」を入れる（各文が別合成なので、文末の余白が次の字幕までのためになる）
+    query["prePhonemeLength"] = VOICEVOX_PRE_PHONEME
+    query["postPhonemeLength"] = VOICEVOX_POST_PHONEME
     # 動画側と同じサンプリングレートで出す（合成時の再変換を避ける）
     query["outputSamplingRate"] = AUDIO_SAMPLE_RATE
     query["outputStereo"] = False

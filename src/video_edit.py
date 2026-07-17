@@ -9,17 +9,23 @@ import numpy as np
 from moviepy.audio.AudioClip import AudioArrayClip
 from moviepy.editor import (
     AudioFileClip,
-    ImageClip,
+    VideoClip,
     concatenate_audioclips,
     concatenate_videoclips,
 )
 from PIL import Image, ImageDraw, ImageFont
+
+# moviepy 1.0.3 のresizeは Image.ANTIALIAS を使うが、Pillow 10+ で削除された。
+# ズーム(Ken Burns)でmoviepyのresizeを通るため、後方互換のエイリアスを補う。
+if not hasattr(Image, "ANTIALIAS"):
+    Image.ANTIALIAS = Image.LANCZOS
 
 from config.settings import (
     AUDIO_BITRATE,
     AUDIO_CODEC,
     AUDIO_SAMPLE_RATE,
     BGM_VOLUME,
+    KEN_BURNS_ZOOM,
     SUBTITLE_BG_COLOR,
     SUBTITLE_FONT_COLOR,
     SUBTITLE_FONT_SIZE,
@@ -94,98 +100,135 @@ def _create_subtitle_frame(
     return np.array(img)
 
 
-def _load_audio_as_clip(audio_path: Path, lead: float, total_duration: float) -> AudioArrayClip:
-    """WAVを読み込み、前後を無音で埋めた総尺ぶんの音声クリップにする
+def _load_scene_audio(segments: list[dict], front_pad: float, back_pad: float) -> AudioArrayClip:
+    """シーンの全字幕の音声を、前後の無音paddingごと1本のクリップにまとめる
 
-    moviepyのconcatenate_videoclipsは各クリップの音声にset_start()を掛け直すため、
-    クリップ側で付けた開始オフセットは失われ、映像より短い音声を終端超えで読んで
-    IOErrorになる。音声を最初から総尺ぶんの配列にしておけばこの問題は起きない。
-
-    Args:
-        audio_path: 読み込むWAV
-        lead: 先頭に入れる無音の秒数
-        total_duration: 生成するクリップの総尺（秒）
+    字幕ごとにファイルを読んで無音を挟みながら連結する。moviepyの音声連結は
+    終端読み越しでIOErrorになるので、numpy配列を直接組み立てる（_load_audio_as_clip
+    と同じ理由）。
     """
-    with wave.open(str(audio_path), "rb") as wf:
-        rate = wf.getframerate()
-        channels = wf.getnchannels()
-        sample_width = wf.getsampwidth()
-        raw = wf.readframes(wf.getnframes())
+    rate = AUDIO_SAMPLE_RATE
+    parts: list[np.ndarray] = [np.zeros((int(round(front_pad * rate)), 2), dtype=np.float32)]
 
-    if sample_width != 2:
-        raise ValueError(f"想定外のWAV量子化ビット数: {sample_width * 8}bit（16bitのみ対応）")
+    for seg in segments:
+        with wave.open(str(seg["path"]), "rb") as wf:
+            if wf.getframerate() != rate:
+                raise ValueError(f"音声レートが想定外: {wf.getframerate()} != {rate}")
+            channels = wf.getnchannels()
+            raw = wf.readframes(wf.getnframes())
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        samples = samples.reshape(-1, channels)
+        if channels == 1:
+            samples = np.repeat(samples, 2, axis=1)
+        elif channels > 2:
+            samples = samples[:, :2]
+        parts.append(samples)
 
-    # int16 → -1.0〜1.0 のfloatへ
-    samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    samples = samples.reshape(-1, channels)
-    if channels == 1:
-        samples = np.repeat(samples, 2, axis=1)  # ステレオ化
-    elif channels > 2:
-        samples = samples[:, :2]
-
-    total_frames = int(round(total_duration * rate))
-    lead_frames = int(round(lead * rate))
-
-    buffer = np.zeros((total_frames, 2), dtype=np.float32)
-    end = min(lead_frames + samples.shape[0], total_frames)
-    buffer[lead_frames:end] = samples[: end - lead_frames]
-
-    return AudioArrayClip(buffer, fps=rate)
+    parts.append(np.zeros((int(round(back_pad * rate)), 2), dtype=np.float32))
+    return AudioArrayClip(np.concatenate(parts, axis=0), fps=rate)
 
 
-def _load_background(image_path: Path) -> Image.Image:
+def _load_background(image_path: Path) -> np.ndarray:
     """シーン画像を動画サイズに合わせて読み込む（シーンにつき1回だけ）"""
-    return Image.open(image_path).convert("RGB").resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.LANCZOS)
+    img = Image.open(image_path).convert("RGB").resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.LANCZOS)
+    return np.array(img)
 
 
-def _render_frame(
-    background: Image.Image,
-    subtitle_text: str,
-    font_path: str | None = None,
-) -> np.ndarray:
-    """背景に字幕を焼き込んだ1枚の完成フレームを作る
-
-    絵は字幕が変わる間も動かないので、フレームは字幕1枚につき1枚作れば足りる。
-    moviepyのCompositeVideoClipに任せると同じ絵を毎フレーム合成し直して
-    エンコードが十数倍遅くなるため、ここで焼き込んでしまう。
-    """
-    frame = background.copy()
-
-    subtitle = Image.fromarray(_create_subtitle_frame(subtitle_text, font_path=font_path), "RGBA")
-    y = VIDEO_HEIGHT - subtitle.height - SUBTITLE_MARGIN_BOTTOM
-    frame.paste(subtitle, (0, y), subtitle)  # RGBAをマスクにして半透明合成
-
-    return np.array(frame)
+# パン方向のプリセット（シーンごとに切替。開始→終了の位置を、余白に対する割合で表す）
+_PAN_PRESETS = [
+    ((0.0, 0.0), (1.0, 1.0)),  # 左上 → 右下
+    ((1.0, 0.0), (0.0, 1.0)),  # 右上 → 左下
+    ((0.0, 1.0), (1.0, 0.0)),  # 左下 → 右上
+    ((1.0, 1.0), (0.0, 0.0)),  # 右下 → 左上
+]
 
 
-def create_scene_clips(
+def _prepare_subtitle(text: str, font_path: str | None) -> dict:
+    """字幕を1枚ぶん、合成に使う形（RGB・アルファ・貼付y座標）に前処理する"""
+    frame = _create_subtitle_frame(text, font_path=font_path)  # (h, W, 4) uint8
+    return {
+        "rgb": frame[..., :3].astype(np.float32),
+        "alpha": (frame[..., 3:4].astype(np.float32)) / 255.0,
+        "y": VIDEO_HEIGHT - frame.shape[0] - SUBTITLE_MARGIN_BOTTOM,
+        "h": frame.shape[0],
+    }
+
+
+def create_scene_clip(
     image_path: Path,
     segments: list[dict],
+    scene_index: int,
     font_path: str | None = None,
     padding: float = 0.3,
-) -> list[ImageClip]:
-    """1シーン分のクリップ列を生成する
+):
+    """1シーン分のクリップを生成する（背景をゆっくりパン＋字幕オーバーレイ）
 
-    同じ絵の上で字幕だけが切り替わるので、字幕1枚 = 静止画クリップ1つ。
-    尺はその字幕の音声の実尺そのものなので、字幕と声がズレない。
-    シーンの前後にだけ無音の余白を入れる（字幕ごとに空けると間延びするため）。
+    リサイズは重い（moviepyのズームは全画面を毎フレーム再サンプルするので30分で数時間）。
+    そこで少し大きい画像を1回だけ作り、そこから切り取る窓をゆっくり動かす＝パンにする。
+    毎フレームの処理は配列スライス＋字幕領域のα合成だけなので軽い。
+    字幕は画面下部の固定位置で、背景が動いても字幕は動かない。
     """
+    scene_duration = padding * 2 + sum(s["duration"] for s in segments)
+
+    # 各字幕の表示時間帯を確定（先頭の無音paddingぶんずらして開始）
+    subs = []
+    cursor = padding
+    for seg in segments:
+        info = _prepare_subtitle(seg["text"], font_path)
+        info["start"] = cursor
+        info["end"] = cursor + seg["duration"]
+        subs.append(info)
+        cursor += seg["duration"]
+
+    audio_clip = _load_scene_audio(segments, front_pad=padding, back_pad=padding)
+
+    if KEN_BURNS_ZOOM <= 0:
+        # 動き無し：字幕を焼き込んだ静止画を並べる（最速）
+        return _static_scene_clip(image_path, subs, scene_duration, audio_clip)
+
+    # 背景を少し大きく作り（この1回だけリサイズ）、切り取り窓を動かす
+    amount = KEN_BURNS_ZOOM
+    big_w, big_h = int(VIDEO_WIDTH * (1 + amount)), int(VIDEO_HEIGHT * (1 + amount))
+    big = np.asarray(
+        Image.open(image_path).convert("RGB").resize((big_w, big_h), Image.LANCZOS),
+        dtype=np.uint8,
+    )
+    margin_x, margin_y = big_w - VIDEO_WIDTH, big_h - VIDEO_HEIGHT
+    (sx, sy), (ex, ey) = _PAN_PRESETS[scene_index % len(_PAN_PRESETS)]
+
+    def make_frame(t: float) -> np.ndarray:
+        p = min(1.0, t / scene_duration) if scene_duration > 0 else 1.0
+        ox = int(round((sx + (ex - sx) * p) * margin_x))
+        oy = int(round((sy + (ey - sy) * p) * margin_y))
+        frame = big[oy : oy + VIDEO_HEIGHT, ox : ox + VIDEO_WIDTH].astype(np.float32)
+
+        for s in subs:
+            if s["start"] <= t < s["end"]:
+                y, h = s["y"], s["h"]
+                region = frame[y : y + h]
+                frame[y : y + h] = region * (1 - s["alpha"]) + s["rgb"] * s["alpha"]
+                break
+
+        return frame.astype(np.uint8)
+
+    return VideoClip(make_frame, duration=scene_duration).set_audio(audio_clip)
+
+
+def _static_scene_clip(image_path: Path, subs: list[dict], scene_duration: float, audio_clip):
+    """動き無しのシーンクリップ（字幕を焼き込んだ静止画をつなぐ）"""
     background = _load_background(image_path)
-    clips = []
-    last = len(segments) - 1
 
-    for i, seg in enumerate(segments):
-        lead = padding if i == 0 else 0.0
-        trail = padding if i == last else 0.0
-        total_duration = seg["duration"] + lead + trail
+    def make_frame(t: float) -> np.ndarray:
+        frame = background.astype(np.float32)
+        for s in subs:
+            if s["start"] <= t < s["end"]:
+                y, h = s["y"], s["h"]
+                frame = frame.copy()
+                frame[y : y + h] = frame[y : y + h] * (1 - s["alpha"]) + s["rgb"] * s["alpha"]
+                break
+        return frame.astype(np.uint8)
 
-        frame = _render_frame(background, seg["text"], font_path=font_path)
-        audio_clip = _load_audio_as_clip(
-            seg["path"], lead=lead, total_duration=total_duration
-        )
-        clips.append(ImageClip(frame).set_duration(total_duration).set_audio(audio_clip))
-
-    return clips
+    return VideoClip(make_frame, duration=scene_duration).set_audio(audio_clip)
 
 
 def compose_video(
@@ -202,12 +245,12 @@ def compose_video(
 
     logger.info(f"動画合成開始: {len(scenes)}シーン")
 
-    # シーンクリップ作成（字幕1枚につき静止画1つ）
+    # シーンクリップ作成（1シーン＝背景ズーム＋字幕オーバーレイの合成1つ）
     clips = []
     audio_map = {r["scene_id"]: r for r in audio_results}
     skipped = []
 
-    for scene in scenes:
+    for i, scene in enumerate(scenes):
         scene_id = scene["id"]
         image_path = images_dir / f"scene_{scene_id:03d}.png"
         audio_info = audio_map.get(scene_id)
@@ -219,10 +262,11 @@ def compose_video(
             skipped.append(f"scene_{scene_id:03d}(音声なし)")
             continue
 
-        clips.extend(
-            create_scene_clips(
+        clips.append(
+            create_scene_clip(
                 image_path=image_path,
                 segments=audio_info["segments"],
+                scene_index=i,
                 font_path=font_path,
             )
         )
@@ -234,8 +278,8 @@ def compose_video(
     if not clips:
         raise ValueError("有効なシーンクリップがありません")
 
-    # 全シーン結合（全クリップが同サイズなのでchainで十分。composeより速い）
-    logger.info(f"シーン結合中: {len(clips)}クリップ")
+    # 全シーン結合（各シーンとも同サイズのフレームを返すのでchainで十分・速い）
+    logger.info(f"シーン結合中: {len(clips)}シーン")
     final = concatenate_videoclips(clips, method="chain")
 
     # BGM追加

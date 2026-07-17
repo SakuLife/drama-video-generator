@@ -16,10 +16,15 @@ VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
 VIDEO_FPS = 30
 VIDEO_CODEC = "libx264"
-# 中身は静止画のスライドショーで動きが無く、圧縮しやすい。
 # 遅いpresetにしても画質はほぼ変わらず時間だけ延びるのでveryfast。
 VIDEO_PRESET = "veryfast"
 AUDIO_CODEC = "aac"
+
+# === 演出 ===
+# Ken Burns効果：静止画にゆっくりズームをかけて単調さを消す。
+# 0にすると静止画（合成が速い）。0.08なら1シーンで8%ズーム（実測で自然な範囲）。
+# 動きを付けると毎フレーム合成するぶんエンコードは遅くなる。
+KEN_BURNS_ZOOM = 0.08
 AUDIO_BITRATE = "192k"
 
 # === 字幕設定 ===
@@ -36,10 +41,11 @@ SUBTITLE_MAX_CHARS_PER_SEGMENT = 66
 TARGET_SCENES = 70  # 目標シーン数（30分 ≈ 70シーン × 25秒）
 SCENE_DURATION_SEC = 25  # シーンあたりの平均秒数
 
-# 台本＝商品の中核なので品質重視のpro。テーマ出しは軽いのでflash。
+# コスト優先でflashに統一（社長指示 2026-07-17。テスト回数を稼ぐため）。
+# 品質が要るフェーズに入ったら SCRIPT_MODEL を gemini-pro-latest に戻す。
 # ※バージョン直書き（gemini-2.0-flash / 2.5系）は提供終了で404になった実績があるため、
-#   自動で新版に追従する -latest エイリアスを使う（2026-07-15に疎通確認済み）。
-SCRIPT_MODEL = "gemini-pro-latest"
+#   自動で新版に追従する -latest エイリアスを使う。
+SCRIPT_MODEL = "gemini-flash-latest"
 THEME_MODEL = "gemini-flash-latest"
 # JSONは途中で切れると壊れて復旧不能。上限は余裕を持たせる（70シーンで実測3万程度）
 SCRIPT_MAX_OUTPUT_TOKENS = 65536
@@ -72,7 +78,11 @@ VOICEVOX_ENGINE_PATH = os.getenv("VOICEVOX_ENGINE_PATH", r"D:\App\VOICEVOX\vv-en
 VOICEVOX_EXE_PATH = os.getenv("VOICEVOX_EXE_PATH", r"D:\App\VOICEVOX\VOICEVOX.exe")
 VOICEVOX_BOOT_TIMEOUT = 120  # 起動待ちの上限（秒）
 VOICEVOX_SPEAKER_ID = 2  # 四国めたん（ノーマル）- 女性アナウンサー風
-VOICEVOX_SPEED = 1.1  # やや早め（ドラマナレーション風）
+VOICEVOX_SPEED = 1.05  # ドラマナレーション風（棒読み対策で1.1→1.05に落として落ち着かせる）
+VOICEVOX_INTONATION = 1.3  # 抑揚（大きいほど感情的。棒読み対策で1.2→1.3）
+# 文の前後に無音を入れて「間」を作る（棒読み対策の主役。各文が別合成なので効く）
+VOICEVOX_PRE_PHONEME = 0.1  # 文頭の余白（秒）
+VOICEVOX_POST_PHONEME = 0.4  # 文末の余白（秒）＝次の字幕までの「ため」
 # VOICEVOXの既定は24kHz。動画の音声トラック(44.1kHz)と合わせておくと再変換が挟まらない
 AUDIO_SAMPLE_RATE = 44100
 

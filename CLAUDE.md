@@ -95,3 +95,10 @@ YT_REFRESH_TOKEN=      #   YT_REFRESH_TOKENはチャンネル固有なのでロ�
   失敗しても残りは作り切り、再実行で失敗分だけ焼き直す設計。
 - **実行中にコードや設定を編集しない**。ステージが遅延importなので、走行中のプロセスが
   古い設定モジュールと新しいコードを掴んでImportErrorで落ちる（1本無駄にした）。
+
+
+## 18番からの申し送り（2026-09-18）：BGM を KIE×Suno から Google Lyria 3.5 に替えられるか小口実測
+
+- Suno に公式 API は無い（KIE は非公式ラッパー＝規約変更・遮断リスク常在）。Google が Gemini API 内で **Lyria 3.5（フルソング $0.08/曲・無料枠なし）** を出した。料金は 18番が公式 pricing（`ai.google.dev/gemini-api/docs/pricing`）で確認済み。
+- やること：既存の Gemini キーで **1曲だけ**生成し、①音質 ②尺・ループ性 ③商用利用条件（規約を読む）④実際の課金額 を `llm_usage.jsonl` と CLAUDE.md に記録。合格なら `src/` の BGM 生成を Lyria に切替（KIE は画像用に残してよい）。
+- API 従量だが本社ルールの例外②（Claude にできない仕事）に該当。理由をこの行に残す。

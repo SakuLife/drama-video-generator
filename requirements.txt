@@ -2,7 +2,7 @@ google-generativeai>=0.8.0
 google-api-python-client>=2.100.0
 google-auth>=2.23.0
 google-auth-oauthlib>=1.1.0
-moviepy>=1.0.3
+moviepy==1.0.3  # 2.x は moviepy.editor が無く動画合成が落ちる（2026-09-25 venvで実際に踏んだ）
 Pillow>=10.0.0
 requests>=2.31.0
 pydub>=0.25.1

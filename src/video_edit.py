@@ -41,12 +41,28 @@ from config.settings import (
 logger = logging.getLogger(__name__)
 
 
+# 行頭に来てはいけない文字（句読点・閉じ括弧など）と、行末に残してはいけない開き括弧
+_NO_LINE_HEAD = set("、。，．,.！？!?」』）)】〉》…‥ーぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ々")
+_NO_LINE_TAIL = set("「『（(【〈《")
+_MAX_OVERFLOW = 3  # 禁則のために1行をはみ出してよい文字数
+
+
 def _wrap_text(text: str, max_chars: int = SUBTITLE_MAX_CHARS_PER_LINE) -> str:
-    """テキストを指定文字数で改行"""
+    """テキストを指定文字数で改行（行頭の「、」等は前の行へ追い込む簡易禁則つき）
+
+    2026-09-25: 字幕の行頭に「、」が来ていた（30分版の実物で確認）ため禁則を追加。
+    """
     lines = []
     while len(text) > max_chars:
-        lines.append(text[:max_chars])
-        text = text[max_chars:]
+        cut = max_chars
+        # 行頭禁則: 次の行の先頭が句読点・閉じ括弧なら、はみ出して前の行に入れる
+        while cut < len(text) and text[cut] in _NO_LINE_HEAD and cut - max_chars < _MAX_OVERFLOW:
+            cut += 1
+        # 行末禁則: 行末が開き括弧なら次の行へ送る
+        while cut > 1 and text[cut - 1] in _NO_LINE_TAIL:
+            cut -= 1
+        lines.append(text[:cut])
+        text = text[cut:]
     if text:
         lines.append(text)
     return "\n".join(lines)

@@ -70,6 +70,8 @@ YT_REFRESH_TOKEN=      #   YT_REFRESH_TOKENはチャンネル固有なのでロ�
    - OAuthクライアントID（デスクトップアプリ）を作成しjsonをDL
    - `.venv\Scripts\python.exe ../_shared/secrets/mint_youtube_token.py --target 3_drama --client-secrets <json>`
 2. 鍵を入れる前に `--upload` 無しで30分版を1本作って中身を確認 → 良ければ鍵を入れる
+   - **2026-09-25 に venv で1本通した**（`generated/check_0925/video.mp4`・28.5分・画像70/70成功・字幕267枚・
+     台本1分＋画像49分＋音声24分＋合成23分＝**約1時間40分**）。社長の視聴確認待ち
    （入れた翌日から `drama_daily` が毎日19:30に作って翌日18:00に予約投稿する）
 
 **自動実行はタスクスケジューラ `drama_daily`（`run_daily.bat`）に決定**（2026-09-23）。
@@ -108,6 +110,8 @@ YT_REFRESH_TOKEN=      #   YT_REFRESH_TOKENはチャンネル固有なのでロ�
 - **venv の moviepy は 1.0.3 に固定**（`requirements.txt`）。2026-09-23 に作った `.venv` に 2.2.1 が入り、
   `moviepy.editor` が無くて**動画合成が必ず落ちる状態**だった（鍵を入れた日から毎日失敗していた）。2026-09-25 に直した。
   システムの `py -3.11` は 1.0.3 なので手動実行では気づけない＝**確認は必ず `.venv\Scripts\python.exe` で**。
+- **字幕は簡易禁則つきで折り返す**（`_wrap_text`）。単純に22字で切ると行頭に「、」「」」が来る
+  （2026-09-25 の30分版で336文中31文）。行頭禁則の文字は前の行へ最大3字はみ出して入れる。
 - **実行中にコードや設定を編集しない**。ステージが遅延importなので、走行中のプロセスが
   古い設定モジュールと新しいコードを掴んでImportErrorで落ちる（1本無駄にした）。
 

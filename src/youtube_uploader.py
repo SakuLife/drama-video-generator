@@ -130,6 +130,9 @@ def upload_video(
             "privacyStatus": "private",
             "publishAt": publish_at,
             "selfDeclaredMadeForKids": YT_MADE_FOR_KIDS,
+            # 実写風のAI画像で人物を描いている＝YouTubeの「改変・合成コンテンツ」の申告対象。
+            # 申告しないと規約違反で削除・収益停止の対象になりうる（2026-09-29 追加）
+            "containsSyntheticMedia": True,
         },
     }
 

@@ -55,25 +55,24 @@ python main.py --stage upload
 ```
 YT_CLIENT_ID=          # 中央 .env に設定済み（2026-09-27・1番と共用）
 YT_CLIENT_SECRET=      # 同上
-YT_REFRESH_TOKEN=      # ★未設定：チャンネル固有なのでローカル.envに置く（発行手順は下の「残作業」）
+YT_REFRESH_TOKEN=      # 設定済み（2026-09-29・「AIショートドラマ」）。チャンネル固有なのでローカル.envに置く
 ```
 
-## 残作業（社長の手が要るもの・2026-09-29時点）
-投稿以外は全ステージ実測で動作確認済み。**残りは YouTube の鍵だけ**（ブラウザ操作が要る）。
+## 🔴 いまの状態（2026-09-29）＝稼働。毎日19:30に1本作り、翌18:00に「AIショートドラマ」へ予約投稿
 
-1. **YouTube投稿の鍵**（これが無いと投稿できない）
-   - 2026-09-29 時点で `YT_CLIENT_ID` / `YT_CLIENT_SECRET`（中央 .env）は**入っている**
-     （1番が 2026-09-27 に4番の `client_secret_1051884138240-…json` で発行）。**残りは 3番の `YT_REFRESH_TOKEN` だけ**
-   - 🔴 **鍵は「許可したときに選んだチャンネル」に紐づく**。同じGoogleアカウントに漢字クイズ・LINEチャットがあるので、
-     同意画面の「チャンネルを選択」で**ドラマ用のチャンネル**を選ぶ（1番は既定の漢字チャンネルに紐づいて誤投稿寸前だった）
-   - 発行: `.venv\Scripts\python.exe ../_shared/secrets/mint_youtube_token.py --target 3_drama --client-secrets ../4_youtube-data-factory/secrets/client_secret_1051884138240-av2d1a3e507cb6sm2l7sdit1sivu94em.apps.googleusercontent.com.json`
-     → 最後に「この鍵の投稿先チャンネル」が出る（2026-09-29 追加）。違えば `.env` の `YT_REFRESH_TOKEN` を空にしてやり直す
-   - ⚠ 1日の上限は1プロジェクト10,000ユニット・投稿1本1,600。1番と共用で1日2本＝3,200（余裕はある）
-   - ⚠ 新チャンネルは電話番号の確認（`youtube.com/verify`）前だとカスタムサムネが403で付かない。長尺はサムネが命なので先に済ませる
-2. 鍵を入れる前に `--upload` 無しで30分版を1本作って中身を確認 → 良ければ鍵を入れる
-   - **2026-09-25 に venv で1本通した**（`generated/check_0925/video.mp4`・28.5分・画像70/70成功・字幕267枚・
-     台本1分＋画像49分＋音声24分＋合成23分＝**約1時間40分**）。社長の視聴確認待ち
-   （入れた翌日から `drama_daily` が毎日19:30に作って翌日18:00に予約投稿する）
+- 投稿先＝**「AIショートドラマ」`@ai---short---dramaa`**（id=`UCHNn33QhtCIUdVBvYOzITHw`・長尺アップロード可＝`eligible`）。
+  鍵は `.env` の `YT_REFRESH_TOKEN`（2026-09-29 発行）。クライアントは4番の `client_secret_1051884138240-…json` を1番と共用
+- **止めたいとき＝`.env` の `YT_REFRESH_TOKEN` を空にする**（`require_env.py` が弾いて何もせず正常終了する）
+- 鍵の作り直し: `.venv/Scripts/python.exe ../_shared/secrets/mint_youtube_token.py --target 3_drama --client-secrets ../4_youtube-data-factory/secrets/client_secret_1051884138240-av2d1a3e507cb6sm2l7sdit1sivu94em.apps.googleusercontent.com.json`
+  - 🔴 **鍵は「許可したときに選んだチャンネル」に紐づく**。同じGoogleアカウントに漢字クイズ・LINEチャットがあるので、
+    同意画面でドラマ用を選ぶ。最後に「この鍵の投稿先チャンネル」が出る＝違えば空にしてやり直す
+  - ⚠ Claude Code の `!` は Git Bash で動く＝パス区切りは `/`（`\` は消えて `command not found` になる）
+- 投稿は `private`＋`publishAt`（18:00 JST・過ぎていれば翌日）＋**`containsSyntheticMedia: True`**
+  （実写風のAI人物＝YouTubeの「改変・合成コンテンツ」の申告対象。2026-09-29 追加）
+- ⚠ 1日の上限は1プロジェクト10,000ユニット・投稿1本1,600。1番と共用で1日2本＝3,200
+- ⚠ カスタムサムネは電話番号の確認（`youtube.com/verify`）前だと403で付かない（失敗しても投稿は止まらない）
+- 1本の実測（2026-09-25・`generated/check_0925/`）: 28.5分・台本1分＋画像49分＋音声24分＋合成23分＝**約1時間40分**。
+  KIEAI 画像70枚＝1本あたり約100〜210円（一覧価格からの見積り・実額は未確認）
 
 **自動実行はタスクスケジューラ `drama_daily`（`run_daily.bat`）に決定**（2026-09-23）。
 旧案の GitHub Actions（`.github/workflows/daily-drama.yml`・self-hostedランナー）は使わない。

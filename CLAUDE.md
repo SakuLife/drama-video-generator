@@ -53,22 +53,23 @@ python main.py --stage upload
 `GEMINI_API_KEY` `KIEAI_API_KEY` `VOICEVOX_URL` `DISCORD_WEBHOOK_URL` は
 中央シークレット `_shared/secrets/.env` から自動継承される（ローカル`.env`が優先）。
 ```
-YT_CLIENT_ID=          # ★未設定：投稿にはこの3つが要る
-YT_CLIENT_SECRET=      #   発行: python ../_shared/secrets/mint_youtube_token.py --target 3_drama
-YT_REFRESH_TOKEN=      #   YT_REFRESH_TOKENはチャンネル固有なのでローカル.envに置く
+YT_CLIENT_ID=          # 中央 .env に設定済み（2026-09-27・1番と共用）
+YT_CLIENT_SECRET=      # 同上
+YT_REFRESH_TOKEN=      # ★未設定：チャンネル固有なのでローカル.envに置く（発行手順は下の「残作業」）
 ```
 
-## 残作業（社長の手が要るもの・2026-09-25時点）
+## 残作業（社長の手が要るもの・2026-09-29時点）
 投稿以外は全ステージ実測で動作確認済み。**残りは YouTube の鍵だけ**（ブラウザ操作が要る）。
 
-1. **YouTube投稿の鍵**（これが無いと投稿できない。1番のLINE動画も同じく未設定）
-   - ⚠ 2026-09-25 時点で `YT_CLIENT_ID` / `YT_CLIENT_SECRET`（中央 .env）も空＝クライアントIDから作る
-   - **GCPプロジェクトは「新AutoSystem」**（GEMINI_API_KEYを発行した方）。
-     親CLAUDE.mdの `1051884138240` はDrive/Sheets用なので取り違えないこと
-   - YouTube Data API v3を有効化 → OAuth同意画面を「公開(本番)」に
-     （テスト状態だとrefresh_tokenが7日で失効し毎週止まる）
-   - OAuthクライアントID（デスクトップアプリ）を作成しjsonをDL
-   - `.venv\Scripts\python.exe ../_shared/secrets/mint_youtube_token.py --target 3_drama --client-secrets <json>`
+1. **YouTube投稿の鍵**（これが無いと投稿できない）
+   - 2026-09-29 時点で `YT_CLIENT_ID` / `YT_CLIENT_SECRET`（中央 .env）は**入っている**
+     （1番が 2026-09-27 に4番の `client_secret_1051884138240-…json` で発行）。**残りは 3番の `YT_REFRESH_TOKEN` だけ**
+   - 🔴 **鍵は「許可したときに選んだチャンネル」に紐づく**。同じGoogleアカウントに漢字クイズ・LINEチャットがあるので、
+     同意画面の「チャンネルを選択」で**ドラマ用のチャンネル**を選ぶ（1番は既定の漢字チャンネルに紐づいて誤投稿寸前だった）
+   - 発行: `.venv\Scripts\python.exe ../_shared/secrets/mint_youtube_token.py --target 3_drama --client-secrets ../4_youtube-data-factory/secrets/client_secret_1051884138240-av2d1a3e507cb6sm2l7sdit1sivu94em.apps.googleusercontent.com.json`
+     → 最後に「この鍵の投稿先チャンネル」が出る（2026-09-29 追加）。違えば `.env` の `YT_REFRESH_TOKEN` を空にしてやり直す
+   - ⚠ 1日の上限は1プロジェクト10,000ユニット・投稿1本1,600。1番と共用で1日2本＝3,200（余裕はある）
+   - ⚠ 新チャンネルは電話番号の確認（`youtube.com/verify`）前だとカスタムサムネが403で付かない。長尺はサムネが命なので先に済ませる
 2. 鍵を入れる前に `--upload` 無しで30分版を1本作って中身を確認 → 良ければ鍵を入れる
    - **2026-09-25 に venv で1本通した**（`generated/check_0925/video.mp4`・28.5分・画像70/70成功・字幕267枚・
      台本1分＋画像49分＋音声24分＋合成23分＝**約1時間40分**）。社長の視聴確認待ち

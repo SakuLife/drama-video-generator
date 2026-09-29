@@ -3,6 +3,7 @@
 import json
 import logging
 import subprocess
+import time as time_module
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -64,6 +65,47 @@ def verify_video(video_path: Path, min_duration_sec: float = 60.0) -> float:
 
     logger.info(f"投稿前チェックOK: {duration / 60:.1f}分 / {video_path.stat().st_size / 1e6:.0f}MB")
     return duration
+
+
+def wait_until_accepted(youtube, video_id: str, timeout_sec: int = 600, interval_sec: int = 20) -> str:
+    """アップロード後、YouTube が動画を受け付けたかを確かめる
+
+    videos.insert が ID を返しても、受け付けられたとは限らない。2026-09-29 の本番1本目は
+    ID が返ったのに「アップロード失敗: 長すぎる動画」で弾かれ（電話番号未確認のチャンネルは15分まで）、
+    ログにも Discord にも「投稿完了」と出ていた。channels.list の longUploadsStatus は
+    'eligible' を返していた＝当てにならない。
+
+    Returns:
+        最後に見た uploadStatus（'processed' か、時間内に処理が終わらなければ 'uploaded'）
+
+    Raises:
+        RuntimeError: 弾かれた（rejected / failed / deleted）か、動画が見つからない場合
+    """
+    deadline = datetime.now() + timedelta(seconds=timeout_sec)
+    status = ""
+    while True:
+        items = youtube.videos().list(part="status,processingDetails", id=video_id).execute().get("items", [])
+        if not items:
+            raise RuntimeError(
+                f"アップロード後に動画が見つかりません（YouTube に弾かれた可能性）: https://youtu.be/{video_id}。"
+                "15分超の動画なら、チャンネルの電話番号確認（youtube.com/verify）が済んでいるか見る"
+            )
+        st = items[0].get("status", {})
+        status = st.get("uploadStatus", "")
+        if status in ("rejected", "failed", "deleted"):
+            reason = st.get("rejectionReason") or st.get("failureReason") or "不明"
+            raise RuntimeError(
+                f"YouTube がアップロードを受け付けませんでした（{status}: {reason}）: https://youtu.be/{video_id}。"
+                "reason が length なら電話番号確認（youtube.com/verify）が必要"
+            )
+        if status == "processed":
+            logger.info("YouTube側の処理完了を確認")
+            return status
+        if datetime.now() >= deadline:
+            # 30分尺は処理に時間がかかる。弾かれていないことだけ確認できた状態で先へ進む
+            logger.warning(f"YouTube側の処理が {timeout_sec}秒で終わらず（{status}）。弾かれてはいない")
+            return status
+        time_module.sleep(interval_sec)
 
 
 def get_credentials(client_id: str, client_secret: str, refresh_token: str) -> Credentials:
@@ -160,6 +202,10 @@ def upload_video(
             logger.info(f"アップロード進捗: {progress}%")
 
     video_id = response["id"]
+    logger.info(f"アップロード送信完了: https://youtu.be/{video_id}（受け付けられたかを確認中）")
+
+    # ID が返っても受け付けられたとは限らない（長すぎる動画は後から弾かれる）
+    wait_until_accepted(youtube, video_id)
     logger.info(f"アップロード完了: https://youtu.be/{video_id}")
 
     # サムネイル設定

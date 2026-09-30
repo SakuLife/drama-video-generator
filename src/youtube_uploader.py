@@ -11,14 +11,16 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-from config.settings import YT_CATEGORY_ID, YT_DEFAULT_TAGS, YT_MADE_FOR_KIDS, YT_PUBLISH_HOUR_JST
+from config.settings import MAX_UPLOAD_SEC, YT_CATEGORY_ID, YT_DEFAULT_TAGS, YT_MADE_FOR_KIDS, YT_PUBLISH_HOUR_JST
 
 logger = logging.getLogger(__name__)
 
 JST = timezone(timedelta(hours=9))
 
 
-def verify_video(video_path: Path, min_duration_sec: float = 60.0) -> float:
+def verify_video(
+    video_path: Path, min_duration_sec: float = 60.0, max_duration_sec: float = MAX_UPLOAD_SEC
+) -> float:
     """投稿前に動画が壊れていないか確かめる
 
     エンコード中に落ちると、mp4は「存在するのに最後まで書かれていない」状態で残る
@@ -29,7 +31,7 @@ def verify_video(video_path: Path, min_duration_sec: float = 60.0) -> float:
         動画の尺（秒）
 
     Raises:
-        RuntimeError: 壊れている・短すぎる・音声トラックが無い場合
+        RuntimeError: 壊れている・短すぎる・長すぎる（未確認チャンネルの15分上限）・音声トラックが無い場合
     """
     if not video_path.exists():
         raise RuntimeError(f"アップロードする動画がありません: {video_path}")
@@ -61,6 +63,13 @@ def verify_video(video_path: Path, min_duration_sec: float = 60.0) -> float:
         raise RuntimeError(
             f"動画が短すぎます（{duration:.1f}秒 < {min_duration_sec:.0f}秒）。"
             f"途中で切れた可能性があります: {video_path}"
+        )
+
+    if duration > max_duration_sec:
+        # 電話番号未確認のチャンネルは15分超を受け付けない。送っても弾かれるだけなので送らない
+        raise RuntimeError(
+            f"動画が長すぎます（{duration / 60:.1f}分 > {max_duration_sec / 60:.1f}分）。"
+            f"未確認チャンネルは15分超を上げられない。TARGET_SCENES を減らすか電話番号を確認して MAX_UPLOAD_SEC を上げる: {video_path}"
         )
 
     logger.info(f"投稿前チェックOK: {duration / 60:.1f}分 / {video_path.stat().st_size / 1e6:.0f}MB")
@@ -102,7 +111,7 @@ def wait_until_accepted(youtube, video_id: str, timeout_sec: int = 600, interval
             logger.info("YouTube側の処理完了を確認")
             return status
         if datetime.now() >= deadline:
-            # 30分尺は処理に時間がかかる。弾かれていないことだけ確認できた状態で先へ進む
+            # 長尺は処理に時間がかかる。弾かれていないことだけ確認できた状態で先へ進む
             logger.warning(f"YouTube側の処理が {timeout_sec}秒で終わらず（{status}）。弾かれてはいない")
             return status
         time_module.sleep(interval_sec)

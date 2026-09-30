@@ -34,7 +34,7 @@ THEME_SUGGESTION_PROMPT = """\
 
 SCRIPT_GENERATION_PROMPT = """\
 あなたはYouTubeドラマ動画の脚本家です。
-以下のテーマで約30分のドラマ台本を作成してください。
+以下のテーマで約{target_minutes}分のドラマ台本を作成してください。
 
 ## テーマ
 {theme}

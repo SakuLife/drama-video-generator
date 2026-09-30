@@ -17,6 +17,7 @@ from config.prompts import (
 from config.settings import (
     SCRIPT_MAX_OUTPUT_TOKENS,
     SCRIPT_MODEL,
+    MINUTES_PER_SCENE,
     TARGET_SCENES,
     THEME_MAX_OUTPUT_TOKENS,
     THEME_MODEL,
@@ -131,6 +132,7 @@ def generate_script(
     prompt = SCRIPT_GENERATION_PROMPT.format(
         theme=theme,
         target_scenes=target_scenes,
+        target_minutes=round(target_scenes * MINUTES_PER_SCENE),
     )
 
     logger.info(f"台本生成開始（{SCRIPT_MODEL}）: {theme}")

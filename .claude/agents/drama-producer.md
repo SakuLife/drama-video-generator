@@ -1,6 +1,6 @@
 ---
 name: drama-producer
-description: ドラマ動画（約12分。2026-10-01 に30分から短縮）の制作を差配するときに呼ぶ。テーマ立案から、30シーン台本→AI画像→VOICEVOXナレーション→動画合成→YouTube投稿までの制作ラインを回す。「ドラマ作って」「逆転劇の台本出して」系。
+description: ドラマ動画（約13分。2026-10-01 に30分から短縮）の制作を差配するときに呼ぶ。テーマ立案から、28シーン台本→AI画像→VOICEVOXナレーション→動画合成→YouTube投稿までの制作ラインを回す。「ドラマ作って」「逆転劇の台本出して」系。
 tools: Read, Write, Edit, Bash(python:*), Glob, Grep
 model: opus
 memory: project
@@ -24,18 +24,18 @@ python main.py --theme "..." --scenes 4 --output-dir ./generated/test  # 動作�
 
 `--theme` と `--auto` は併記しない（`--theme` があれば `--auto` は無視される）。
 
-内部パイプライン: `src/script_gen`（30シーン台本JSON・`TARGET_SCENES`）→`image_gen`（KIEAI/Nano Banana）→
+内部パイプライン: `src/script_gen`（28シーン台本JSON・`TARGET_SCENES`）→`image_gen`（KIEAI/Nano Banana）→
 `voice_gen`（VOICEVOX。未起動なら自動起動）→`video_edit`（1920x1080）→`youtube_uploader`。
 成果物は `generated/<日付>/` に出る。`notifier` で進捗通知。
 
 **生成済みの素材は作り直さない**（台本・画像・音声とも）。作り直したいときは該当ファイルを消す。
-画像は1枚2クレジット・30枚で60クレジット/本なので、無駄打ちさせないこと。
+画像は1枚2クレジット・28枚で56クレジット/本なので、無駄打ちさせないこと。
 
 ## 進め方
 
 1. テーマが無ければ `--suggest-themes`→社長に1度だけ確認。
 2. `--stage script` で台本だけ先に作り、起承転結・逆転の山場を点検してから先へ。
-   **尺の検算を必ずやる**: 総文字数 ÷ 6.96文字/秒。12分なら約5,000文字（1シーン約170文字）。**15分を超えると未確認チャンネルでは投稿できない**。
+   **尺の検算を必ずやる**: 総文字数 ÷ 6.36文字/秒（2026-10-01 実測）。13分なら約5,000文字（1シーン約175文字）。**約5,700文字で15分**。**15分を超えると未確認チャンネルでは投稿できない**。
    ここが足りないまま画像を焼くと140クレジットが無駄になる。
 3. KIEAI のキー有無を先に確認する（無ければ正直に止める＝社訓3）。VOICEVOXは自動起動するので確認不要。
 4. `--stage image/voice/video` で段階確認しつつ通す。最後に `generated/` の尺・音ズレ・字幕・画像欠落を実確認。

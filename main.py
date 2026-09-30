@@ -267,7 +267,7 @@ def main() -> None:
         "--scenes",
         type=int,
         default=TARGET_SCENES,
-        help=f"生成シーン数（デフォルト: {TARGET_SCENES}＝約12分。動作確認は少なめに）",
+        help=f"生成シーン数（デフォルト: {TARGET_SCENES}＝約13分。動作確認は少なめに）",
     )
     parser.add_argument("--output-dir", type=str, help="出力先を明示指定（検証用）")
 

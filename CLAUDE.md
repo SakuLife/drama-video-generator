@@ -78,6 +78,24 @@ YT_REFRESH_TOKEN=      # 設定済み（2026-09-29・「AIショートドラマ�
 - 🔴 **投稿前に尺を検査して15分近くを超えたら投稿しない**（`verify_video` の `MAX_UPLOAD_SEC`＝14分40秒）。送っても弾かれるだけ
 - 🔴 **タスクの最大実行時間は5時間**（`07_tasks.ps1` の `TimeLimitHours = 5`）。2026-09-29 の本番1本目は **2時間34分**（画像だけで1時間41分）かかり、既定の2時間で 21:30 に wscript が打ち切られていた（結果 267014）。Python は生き残って投稿まで済んだが運任せ＝2026-09-30 に延ばした
 
+## チャンネルの見た目（2026-10-02 Studio で設定）
+- 表の名前は **「ほろり劇場」**＝アイコン・バナー・説明文・ハンドル `@horori_gekijo` は設定済み。
+  ⚠ **チャンネル名だけ「AIショートドラマ」のまま**（名前は14日に2回まで。最初の保存が失敗扱いで枠を使い、
+  2026-10-16 ごろまで変えられない）→ その日以降に Studio で「ほろり劇場｜泣ける逆転ドラマ」へ
+- 素材＝`assets/channel/`（`icon.html`/`banner.html` を Edge `--headless --screenshot` でPNG化・説明文 `description.txt`）。
+  アイコン・説明文は API では変えられない（今の鍵のスコープ外）＝Studio を Chrome 拡張で操作した
+
+## 再生数を見ながら試す（社長指示 2026-10-02「再生数見て色々テストしながら試してみて」）
+- **ナレーションの声を日替わり**（`src/experiment.py` の `VOICE_VARIANTS`＝四国めたん／No.7 読み聞かせ／青山龍星 しっとり）。
+  その日の条件は `generated/<日付>/variant.json` に保存＝途中再開しても声が混ざらない。説明欄の末尾に
+  フィクションの断り＋`VOICEVOX:キャラ名`（利用規約で必須）を自動で付ける
+- 投稿ごとに `data/uploads.jsonl`（何を試したか）、毎日 `scripts/collect_stats.py` が `data/stats.jsonl`（再生数）、
+  月曜に `scripts/analyze.py --notify` が `reports/analysis_*.md`＋Discord。**1条件5本未満の比較は「参考」**
+- ⚠ 視聴維持率（YouTube Analytics API）は **GCP プロジェクト `1051884138240` で API が無効**＝403。
+  有効化（コンソールでボタン1つ）は社長の作業。それまでは再生数だけ記録する
+- `run_daily.bat`: **1日1本の当日ガード**（`main.py --upload` は今日投稿済みなら exit 9・追加は `--force`）／
+  失敗したら1回だけ再実行（生成済みの画像・音声は使い回す。2026-09-30 画像3枚失敗・10-01 MemoryError で2日落ちた）
+
 **自動実行はタスクスケジューラ `drama_daily`（`run_daily.bat`）に決定**（2026-09-23）。
 旧案の GitHub Actions（`.github/workflows/daily-drama.yml`・self-hostedランナー）は使わない。
 `run_daily.bat` は `.venv` の Python を使う＝**venv の依存がズレると毎日黙って落ちる**（下の moviepy 参照）。

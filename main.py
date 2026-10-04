@@ -73,6 +73,12 @@ def run_pipeline(
 
     script_path = output_dir / "script.json"
 
+    # この回に試す条件（声など）。再開しても同じ条件で続けるよう output_dir に保存される
+    from src.experiment import choose_variant
+
+    variant = choose_variant(output_dir)
+    logger.info(f"今回の条件: {variant}")
+
     try:
         # === ステージ1: 台本生成 ===
         if stage in (None, "script"):
@@ -105,6 +111,9 @@ def run_pipeline(
                     target_scenes=target_scenes,
                 )
                 logger.info(f"台本生成完了: {len(script['scenes'])}シーン")
+                # 分析でテーマ別にも比べられるよう、元のテーマを台本に残す
+                script["theme"] = theme
+                script_path.write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
 
             if stage == "script":
                 return
@@ -142,6 +151,7 @@ def run_pipeline(
                 script=script,
                 output_dir=output_dir,
                 voicevox_url=voicevox_url,
+                speaker_id=variant["speaker_id"],
             )
             logger.info(f"音声生成完了: {len(audio_results)}件")
 
@@ -204,6 +214,7 @@ def run_pipeline(
                     "発行: python ../_shared/secrets/mint_youtube_token.py --target 3_drama --client-secrets <json>"
                 )
 
+            from src.experiment import description_with_credits, record_upload
             from src.youtube_uploader import upload_video
 
             # 動画の実体チェック（壊れ・無音・短すぎ）は upload_video 側の verify_video が行う
@@ -213,7 +224,8 @@ def run_pipeline(
             result = upload_video(
                 video_path=video_path,
                 title=script["title"],
-                description=script.get("description", ""),
+                # 末尾にフィクションの断りと VOICEVOX のクレジット（利用規約で必須）を付ける
+                description=description_with_credits(script.get("description", ""), variant),
                 tags=script.get("tags", []),
                 thumbnail_path=thumbnail_path if thumbnail_path.exists() else None,
                 client_id=yt_client_id,
@@ -222,6 +234,15 @@ def run_pipeline(
             )
 
             logger.info(f"YouTube投稿完了: {result['url']}")
+
+            # 分析用に「この回の条件」を残す（scripts/analyze.py が条件ごとに再生数を比べる）
+            record_upload(
+                result=result,
+                script=script,
+                variant=variant,
+                output_dir=output_dir,
+                duration_sec=sum(r["duration"] for r in audio_results),
+            )
 
             # Discord通知
             if discord_webhook:
@@ -270,6 +291,7 @@ def main() -> None:
         help=f"生成シーン数（デフォルト: {TARGET_SCENES}＝約13分。動作確認は少なめに）",
     )
     parser.add_argument("--output-dir", type=str, help="出力先を明示指定（検証用）")
+    parser.add_argument("--force", action="store_true", help="今日すでに投稿済みでも作って投稿する")
 
     args = parser.parse_args()
 
@@ -286,6 +308,15 @@ def main() -> None:
             print(f"   ジャンル: {t['genre']}")
             print(f"   あらすじ: {t['synopsis']}")
         return
+
+    # 1日1本の当日ガード（タスクはログオン時にも起動する＝再起動した日に2本目を投稿しないため）。
+    # 終了コード9＝「今日は済んでいる」。本社ルール「日次バッチは当日ガードを入れる」（2026-10-02 追加）
+    if args.upload and not args.force:
+        from src.experiment import uploaded_today
+
+        if uploaded_today():
+            logging.getLogger(__name__).info("今日はもう投稿済みなので何もしません（追加で出すなら --force）")
+            sys.exit(9)
 
     # テーマが要るのは台本を作るときだけ。以降のステージは保存済みscript.jsonから再開する。
     if args.stage in (None, "script") and not args.theme and not args.auto:

@@ -18,9 +18,14 @@ DATA_DIR = PROJECT_ROOT / "data"
 UPLOADS_LOG = DATA_DIR / "uploads.jsonl"
 
 # ナレーションの声の候補（VOICEVOX）。credit は利用規約で必須の表記「VOICEVOX:キャラ名」
-# 選んだ理由: ドラマの語りに向く落ち着いた声。めたん＝従来の声（比較の基準）
+# 🔴 足す前に必ずその声の規約（エンジンの /speaker_info の policy）を読む。キャラごとに商用条件が違う。
+# 2026-10-06: 青山龍星（企業が携わる利用は事前確認）と No.7（配信収入以外の商用は事前確認）を外した。
+# 収益化を目指す SakuLife の運用が当たるか判断がつかないため。確認が取れたら RETIRED_VOICES から戻す。
 VOICE_VARIANTS: list[dict] = [
     {"key": "metan", "speaker_id": 2, "label": "四国めたん（ノーマル）", "credit": "VOICEVOX:四国めたん"},
+]
+# 規約の確認待ちで外した声（分析の表示名にだけ使う。投稿には使わない）
+RETIRED_VOICES: list[dict] = [
     {"key": "no7_yomikikase", "speaker_id": 31, "label": "No.7（読み聞かせ）", "credit": "VOICEVOX:No.7"},
     {"key": "ryusei_shittori", "speaker_id": 84, "label": "青山龍星（しっとり）", "credit": "VOICEVOX:青山龍星"},
 ]

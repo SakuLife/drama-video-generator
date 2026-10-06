@@ -28,7 +28,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(ROOT / ".env")
 load_dotenv(ROOT.parent / "_shared" / "secrets" / ".env")
 
-from src.experiment import DATA_DIR, VOICE_VARIANTS, load_uploads  # noqa: E402
+from src.experiment import DATA_DIR, RETIRED_VOICES, VOICE_VARIANTS, load_uploads  # noqa: E402
 
 JST = timezone(timedelta(hours=9))
 REPORTS_DIR = ROOT / "reports"
@@ -94,7 +94,7 @@ def _summ(vals: list[float]) -> str:
 
 def build_report(rows: list[dict]) -> str:
     """Markdown の週報"""
-    labels = {v["key"]: v["label"] for v in VOICE_VARIANTS}
+    labels = {v["key"]: v["label"] for v in VOICE_VARIANTS + RETIRED_VOICES}
     by_voice: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_voice[r.get("voice") or "不明"].append(r)

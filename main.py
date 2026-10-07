@@ -147,11 +147,17 @@ def run_pipeline(
             if not ensure_voicevox(voicevox_url):
                 raise RuntimeError("VOICEVOXを起動できませんでした")
 
+            # 🔴 読み上げはかなで（漢字を VOICEVOX に渡さない）。ズレ0件を確かめた読みだけ使う。
+            #    作れなければ ReadingsPending＝夜中に再試行（漢字のまま出すことはしない・2026-10-08 本社決定）
+            from src.reading import prepare_readings
+
+            readings = prepare_readings(script, output_dir, variant["speaker_id"])
             audio_results = generate_all_voices(
                 script=script,
                 output_dir=output_dir,
                 voicevox_url=voicevox_url,
                 speaker_id=variant["speaker_id"],
+                readings=readings,
             )
             logger.info(f"音声生成完了: {len(audio_results)}件")
 
@@ -265,11 +271,56 @@ def run_pipeline(
                 )
 
     except Exception as e:
+        from src.reading import ReadingsPending
+
+        if isinstance(e, ReadingsPending):
+            # 失敗ではなく「後で」。夜中の drama_reading_retry が続きから作る
+            logger.warning(f"読みが今は作れないため、夜中に再試行します: {e}")
+            if discord_webhook:
+                notify_error(discord_webhook, "読み作り（あとで再試行）", f"{output_dir.name}: {str(e)[:300]}")
+            raise
         logger.error(f"パイプラインエラー: {e}")
         logger.error(traceback.format_exc())
         if discord_webhook:
             notify_error(discord_webhook, stage or "pipeline", str(e))
         raise
+
+
+def resume_pending() -> int:
+    """読み作りが止まった回（readings_pending.json がある出力先）を続きから作って投稿する
+
+    drama_reading_retry（02:00 から3時間ごと）が呼ぶ。本社決定（2026-10-08）:
+    18時の公開に間に合わなければ（16時を過ぎた・印から22時間以上）その日は作らず、Discord に1行。
+    """
+    from src.experiment import slot_filled
+    from src.reading import PENDING_FILE, ReadingsPending
+    from src.youtube_uploader import get_publish_time
+
+    logger = logging.getLogger(__name__)
+    pending = sorted(GENERATED_DIR.glob(f"*/{PENDING_FILE}"))
+    if not pending:
+        return 0
+    webhook = os.getenv("DISCORD_WEBHOOK_URL", "")
+    now = datetime.now(JST)
+    rc = 0
+    for marker in pending:
+        out_dir = marker.parent
+        since = datetime.fromisoformat(json.loads(marker.read_text(encoding="utf-8"))["since"]).replace(tzinfo=JST)
+        if now.hour >= 16 or now - since > timedelta(hours=22) or slot_filled(get_publish_time()):
+            marker.unlink()
+            msg = f"{out_dir.name}: 読みが公開までに揃わなかったので、この回は作りません（読み間違いを出さないため）"
+            logger.warning(msg)
+            if webhook:
+                notify_error(webhook, "ドラマ動画（この回は休み）", msg)
+            continue
+        logger.info(f"読み作りを再試行: {out_dir.name}")
+        try:
+            run_pipeline(upload=True, output_dir=out_dir)
+        except ReadingsPending:
+            rc = 7  # まだ作れない＝次の再試行へ
+        except Exception:
+            rc = 1
+    return rc
 
 
 def main() -> None:
@@ -292,6 +343,10 @@ def main() -> None:
     )
     parser.add_argument("--output-dir", type=str, help="出力先を明示指定（検証用）")
     parser.add_argument("--force", action="store_true", help="今日すでに投稿済みでも作って投稿する")
+    parser.add_argument(
+        "--resume-pending", action="store_true",
+        help="読み作りが止まった回を続きから作る（drama_reading_retry 用。無ければ何もしない）",
+    )
 
     args = parser.parse_args()
 
@@ -309,27 +364,37 @@ def main() -> None:
             print(f"   あらすじ: {t['synopsis']}")
         return
 
-    # 1日1本の当日ガード（タスクはログオン時にも起動する＝再起動した日に2本目を投稿しないため）。
-    # 終了コード9＝「今日は済んでいる」。本社ルール「日次バッチは当日ガードを入れる」（2026-10-02 追加）
-    if args.upload and not args.force:
-        from src.experiment import uploaded_today
+    if args.resume_pending:
+        sys.exit(resume_pending())
 
-        if uploaded_today():
-            logging.getLogger(__name__).info("今日はもう投稿済みなので何もしません（追加で出すなら --force）")
+    # 1日1本のガード（タスクはログオン時にも起動する＝再起動した日に2本目を投稿しないため）。
+    # 終了コード9＝「次の公開枠はもう埋まっている」。2026-10-08 に「今日投稿したか」から「次の枠が埋まっているか」へ
+    # （夜中の再試行で投稿すると uploaded_at が翌日になり、翌日の本番が誤って止まるため）
+    if args.upload and not args.force:
+        from src.experiment import slot_filled
+        from src.youtube_uploader import get_publish_time
+
+        if slot_filled(get_publish_time()):
+            logging.getLogger(__name__).info("次の公開枠はもう予約済みなので何もしません（追加で出すなら --force）")
             sys.exit(9)
 
     # テーマが要るのは台本を作るときだけ。以降のステージは保存済みscript.jsonから再開する。
     if args.stage in (None, "script") and not args.theme and not args.auto:
         parser.error("--theme または --auto を指定してください（--suggest-themes でテーマ候補表示）")
 
-    run_pipeline(
-        theme=args.theme,
-        stage=args.stage,
-        auto=args.auto,
-        upload=args.upload,
-        target_scenes=args.scenes,
-        output_dir=Path(args.output_dir) if args.output_dir else None,
-    )
+    from src.reading import ReadingsPending
+
+    try:
+        run_pipeline(
+            theme=args.theme,
+            stage=args.stage,
+            auto=args.auto,
+            upload=args.upload,
+            target_scenes=args.scenes,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+        )
+    except ReadingsPending:
+        sys.exit(7)  # 終了コード7＝読み待ち（run_daily.bat はすぐには再実行しない＝上限は時間でしか戻らない）
 
 
 if __name__ == "__main__":

@@ -78,10 +78,19 @@ def record_upload(result: dict, script: dict, variant: dict, output_dir: Path, d
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def uploaded_today() -> bool:
-    """今日すでに1本投稿したか（タスクはログオン時にも起動する＝同じ日に2本目を出さないため）"""
-    today = datetime.now(JST).date().isoformat()
-    return any((u.get("uploaded_at") or "").startswith(today) for u in load_uploads())
+def slot_filled(publish_at: str) -> bool:
+    """次の公開枠（publish_at）に、もう1本予約してあるか
+
+    2026-10-08: 「今日投稿したか」（uploaded_at の日付）で判定していたのを、公開枠で判定に変えた。
+    読み作りが上限で止まった分を夜中に作り直して投稿すると、uploaded_at が翌日になり、
+    翌日 19:30 の本番が「今日はもう投稿済み」と誤って止まるため。
+    """
+    want = datetime.fromisoformat(publish_at.replace("Z", "+00:00"))
+    for u in load_uploads():
+        p = u.get("publish_at")
+        if p and datetime.fromisoformat(p.replace("Z", "+00:00")) == want:
+            return True
+    return False
 
 
 def load_uploads() -> list[dict]:

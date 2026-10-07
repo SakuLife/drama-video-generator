@@ -24,6 +24,8 @@ rem finished images/audio are reused, so a retry only redoes the failed part (20
 "%PY%" main.py --auto --upload >> "logs\daily.log" 2>&1
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="9" goto stats
+rem exit 7 = readings pending (claude -p limit). drama_reading_retry resumes it at night.
+if "%RC%"=="7" goto stats
 if "%RC%"=="0" goto stats
 echo RETRY after exit %RC% >> "logs\daily.log"
 "%PY%" main.py --auto --upload >> "logs\daily.log" 2>&1
@@ -35,4 +37,5 @@ rem Daily view/retention snapshot (data\stats.jsonl). Weekly report to Discord o
 for /f %%d in ('powershell -NoProfile -Command "(Get-Date).DayOfWeek"') do set "DOW=%%d"
 if /i "%DOW%"=="Monday" "%PY%" scripts\analyze.py --notify >> "logs\daily.log" 2>&1
 if "%RC%"=="9" exit /b 0
+if "%RC%"=="7" exit /b 0
 exit /b %RC%

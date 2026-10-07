@@ -196,8 +196,12 @@ def generate_all_voices(
     output_dir: Path,
     speaker_id: int = VOICEVOX_SPEAKER_ID,
     voicevox_url: str = VOICEVOX_URL,
+    readings: dict[str, str] | None = None,
 ) -> list[dict]:
     """台本の全シーンの音声を字幕単位で生成する
+
+    readings（{scene_001_01: かな}）を渡すと、字幕は漢字のまま・読み上げはかなで作る
+    （読み間違いゼロの仕組み・src/reading.py。2026-10-08 から本番はこちら）。
 
     1枚の絵を長く見せながら字幕を送るため、ナレーションを文単位に切って
     それぞれの音声を作る。こうすると字幕の切り替え時刻が音声の実尺で決まり、
@@ -221,7 +225,7 @@ def generate_all_voices(
         for seg in segments:
             if not _is_valid_wav(seg["path"]):
                 generate_voice(
-                    text=seg["text"],
+                    text=readings[seg["path"].stem] if readings else seg["text"],
                     output_path=seg["path"],
                     speaker_id=speaker_id,
                     voicevox_url=voicevox_url,

@@ -18,19 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.reading import adjudicate, compare_engine, fix_mismatches, make_readings, verify  # noqa: E402
-from src.voice_gen import build_scene_segments  # noqa: E402
+from src.reading import adjudicate, compare_engine, fix_mismatches, make_readings, segment_lines, verify  # noqa: E402
 
 SPEAKER = 2  # 四国めたん（本番の声）
-
-
-def segment_lines(script: dict, out_dir: Path) -> dict[str, str]:
-    """字幕1枚ぶんの文を {scene_001_01: 文} で返す（本番の切り方と同じ）"""
-    lines = {}
-    for scene in script["scenes"]:
-        for seg in build_scene_segments(scene, out_dir / "audio"):
-            lines[seg["path"].stem] = seg["text"]
-    return lines
 
 
 def main() -> int:

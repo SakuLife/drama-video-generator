@@ -289,7 +289,7 @@ def run_pipeline(
 def resume_pending() -> int:
     """読み作りが止まった回（readings_pending.json がある出力先）を続きから作って投稿する
 
-    drama_reading_retry（02:00 から3時間ごと）が呼ぶ。本社決定（2026-10-08）:
+    drama_reading_retry（07:00 から3時間ごと・本番 drama_daily は 04:00）が呼ぶ。本社決定（2026-10-08）:
     18時の公開に間に合わなければ（16時を過ぎた・印から22時間以上）その日は作らず、Discord に1行。
     """
     from src.experiment import slot_filled

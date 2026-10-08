@@ -2,7 +2,7 @@
 chcp 932 >nul
 setlocal
 cd /d "%~dp0"
-rem ~13-min drama video (3_drama-video-generator). Called by Task Scheduler (drama_daily, 19:30).
+rem ~13-min drama video (3_drama-video-generator). Called by Task Scheduler (drama_daily, 04:00).
 rem Skips silently while YT_REFRESH_TOKEN is empty (see _shared\portable\require_env.py).
 rem ASCII only in this file (see HQ CLAUDE.md .bat rules).
 set "PY="

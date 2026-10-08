@@ -83,7 +83,7 @@ def slot_filled(publish_at: str) -> bool:
 
     2026-10-08: 「今日投稿したか」（uploaded_at の日付）で判定していたのを、公開枠で判定に変えた。
     読み作りが上限で止まった分を夜中に作り直して投稿すると、uploaded_at が翌日になり、
-    翌日 19:30 の本番が「今日はもう投稿済み」と誤って止まるため。
+    翌日の本番が「今日はもう投稿済み」と誤って止まるため。
     """
     want = datetime.fromisoformat(publish_at.replace("Z", "+00:00"))
     for u in load_uploads():

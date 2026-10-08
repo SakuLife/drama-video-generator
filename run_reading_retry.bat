@@ -1,8 +1,8 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-rem Resume a drama run whose readings (kana) could not be made at 19:30 (claude -p limit).
-rem Called by Task Scheduler (drama_reading_retry, 02:00 every 3h). Does nothing if no pending run.
+rem Resume a drama run whose readings (kana) could not be made at 04:00 (claude -p limit).
+rem Called by Task Scheduler (drama_reading_retry, 07:00 every 3h). Does nothing if no pending run.
 rem ASCII only in this file (see HQ CLAUDE.md .bat rules).
 set "PY="
 if exist ".venv\Scripts\python.exe" set "PY=%~dp0.venv\Scripts\python.exe"
